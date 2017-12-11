@@ -73,6 +73,7 @@ NEW_TESTS = test_arabic.res \
 	    test_assert.res \
 	    test_autochdir.res \
 	    test_autocmd.res \
+	    test_autoload.res \
 	    test_backspace_opt.res \
 	    test_breakindent.res \
 	    test_bufwintabinfo.res \
@@ -115,6 +116,7 @@ NEW_TESTS = test_arabic.res \
 	    test_highlight.res \
 	    test_history.res \
 	    test_hlsearch.res \
+	    test_iminsert.res \
 	    test_increment.res \
 	    test_increment_dbcs.res \
 	    test_ins_complete.res \
