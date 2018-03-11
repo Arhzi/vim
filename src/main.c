@@ -111,7 +111,7 @@ main
 # endif
 (int argc, char **argv)
 {
-#ifdef STARTUPTIME
+#if defined(STARTUPTIME) || defined(CLEAN_RUNTIMEPATH)
     int		i;
 #endif
 
@@ -158,18 +158,25 @@ main
 
 #ifdef STARTUPTIME
     /* Need to find "--startuptime" before actually parsing arguments. */
-    for (i = 1; i < argc; ++i)
-    {
-	if (STRICMP(argv[i], "--startuptime") == 0 && i + 1 < argc)
+    for (i = 1; i < argc - 1; ++i)
+	if (STRICMP(argv[i], "--startuptime") == 0)
 	{
 	    time_fd = mch_fopen(argv[i + 1], "a");
 	    TIME_MSG("--- VIM STARTING ---");
 	    break;
 	}
-    }
 #endif
     starttime = time(NULL);
 
+#ifdef CLEAN_RUNTIMEPATH
+    /* Need to find "--clean" before actually parsing arguments. */
+    for (i = 1; i < argc; ++i)
+	if (STRICMP(argv[i], "--clean") == 0)
+	{
+	    params.clean = TRUE;
+	    break;
+	}
+#endif
     common_init(&params);
 
 #ifdef FEAT_CLIENTSERVER
@@ -264,7 +271,7 @@ main
 	 * Hint: to avoid this when typing a command use a forward slash.
 	 * If the cd fails, it doesn't matter.
 	 */
-	(void)vim_chdirfile(params.fname);
+	(void)vim_chdirfile(params.fname, "drop");
 	if (start_dir != NULL)
 	    mch_dirname(start_dir, MAXPATHL);
     }
@@ -314,7 +321,7 @@ main
 						&& STRCMP(NameBuff, "/") == 0)
 	{
 	    if (params.fname != NULL)
-		(void)vim_chdirfile(params.fname);
+		(void)vim_chdirfile(params.fname, "drop");
 	    else
 	    {
 		expand_env((char_u *)"$HOME", NameBuff, MAXPATHL);
@@ -358,6 +365,13 @@ main
      * Print a warning if stdout is not a terminal.
      */
     check_tty(&params);
+
+#ifdef _IOLBF
+    /* Ensure output works usefully without a tty: buffer lines instead of
+     * fully buffered. */
+    if (silent_mode)
+	setvbuf(stdout, NULL, _IOLBF, 0);
+#endif
 
     /* This message comes before term inits, but after setting "silent_mode"
      * when the input is not a tty. */
@@ -619,7 +633,7 @@ vim_main2(void)
 # ifdef FEAT_SUN_WORKSHOP
 	if (!usingSunWorkShop)
 # endif
-	    gui_wait_for_chars(50L);
+	    gui_wait_for_chars(50L, typebuf.tb_change_cnt);
 	TIME_MSG("GUI delay");
     }
 #endif
@@ -734,10 +748,8 @@ vim_main2(void)
     if (exmode_active)
 	curwin->w_cursor.lnum = curbuf->b_ml.ml_line_count;
 
-#ifdef FEAT_AUTOCMD
     apply_autocmds(EVENT_BUFENTER, NULL, NULL, FALSE, curbuf);
     TIME_MSG("BufEnter autocommands");
-#endif
     setpcmark();
 
 #ifdef FEAT_QUICKFIX
@@ -829,10 +841,8 @@ vim_main2(void)
 #ifdef FEAT_EVAL
     set_vim_var_nr(VV_VIM_DID_ENTER, 1L);
 #endif
-#ifdef FEAT_AUTOCMD
     apply_autocmds(EVENT_VIMENTER, NULL, NULL, FALSE, curbuf);
     TIME_MSG("VimEnter autocommands");
-#endif
 
 #if defined(FEAT_EVAL) && defined(FEAT_CLIPBOARD)
     /* Adjust default register name for "unnamed" in 'clipboard'. Can only be
@@ -847,7 +857,7 @@ vim_main2(void)
     }
 #endif
 
-#if defined(FEAT_DIFF) && defined(FEAT_SCROLLBIND)
+#if defined(FEAT_DIFF)
     /* When a startup script or session file setup for diff'ing and
      * scrollbind, sync the scrollbind now. */
     if (curwin->w_p_diff && curwin->w_p_scb)
@@ -1017,7 +1027,7 @@ common_init(mparm_T *paramp)
      * First find out the home directory, needed to expand "~" in options.
      */
     init_homedir();		/* find real value of $HOME */
-    set_init_1();
+    set_init_1(paramp->clean);
     TIME_MSG("inits 1");
 
 #ifdef FEAT_EVAL
@@ -1148,63 +1158,42 @@ main_loop(
 	    skip_redraw = FALSE;
 	else if (do_redraw || stuff_empty())
 	{
-# ifdef FEAT_GUI
+#ifdef FEAT_GUI
 	    /* If ui_breakcheck() was used a resize may have been postponed. */
 	    gui_may_resize_shell();
-# endif
-#if defined(FEAT_AUTOCMD) || defined(FEAT_CONCEAL)
+#endif
 	    /* Trigger CursorMoved if the cursor moved. */
 	    if (!finish_op && (
-# ifdef FEAT_AUTOCMD
 			has_cursormoved()
-# endif
-# if defined(FEAT_AUTOCMD) && defined(FEAT_CONCEAL)
-			||
-# endif
-# ifdef FEAT_CONCEAL
-			curwin->w_p_cole > 0
-# endif
+#ifdef FEAT_CONCEAL
+			|| curwin->w_p_cole > 0
+#endif
 			)
-# ifdef FEAT_AUTOCMD
-		 && !EQUAL_POS(last_cursormoved, curwin->w_cursor)
-# endif
-		 )
+		 && !EQUAL_POS(last_cursormoved, curwin->w_cursor))
 	    {
-# ifdef FEAT_AUTOCMD
 		if (has_cursormoved())
 		    apply_autocmds(EVENT_CURSORMOVED, NULL, NULL,
 							       FALSE, curbuf);
-# endif
 # ifdef FEAT_CONCEAL
 		if (curwin->w_p_cole > 0)
 		{
-#  ifdef FEAT_AUTOCMD
 		    conceal_old_cursor_line = last_cursormoved.lnum;
-#  endif
 		    conceal_new_cursor_line = curwin->w_cursor.lnum;
 		    conceal_update_lines = TRUE;
 		}
 # endif
-# ifdef FEAT_AUTOCMD
 		last_cursormoved = curwin->w_cursor;
-# endif
 	    }
-#endif
 
-#ifdef FEAT_AUTOCMD
 	    /* Trigger TextChanged if b:changedtick differs. */
 	    if (!finish_op && has_textchanged()
-		    && last_changedtick != CHANGEDTICK(curbuf))
+		    && curbuf->b_last_changedtick != CHANGEDTICK(curbuf))
 	    {
-		if (last_changedtick_buf == curbuf)
-		    apply_autocmds(EVENT_TEXTCHANGED, NULL, NULL,
-							       FALSE, curbuf);
-		last_changedtick_buf = curbuf;
-		last_changedtick = CHANGEDTICK(curbuf);
+		apply_autocmds(EVENT_TEXTCHANGED, NULL, NULL, FALSE, curbuf);
+		curbuf->b_last_changedtick = CHANGEDTICK(curbuf);
 	    }
-#endif
 
-#if defined(FEAT_DIFF) && defined(FEAT_SCROLLBIND)
+#if defined(FEAT_DIFF)
 	    /* Scroll-binding for diff mode may have been postponed until
 	     * here.  Avoids doing it for every change. */
 	    if (diff_need_scrollbind)
@@ -1242,7 +1231,11 @@ main_loop(
 	    if (VIsual_active)
 		update_curbuf(INVERTED);/* update inverted part */
 	    else if (must_redraw)
+	    {
+		mch_disable_flush();	/* Stop issuing gui_mch_flush(). */
 		update_screen(0);
+		mch_enable_flush();
+	    }
 	    else if (redraw_cmdline || clear_cmdline)
 		showmode();
 	    redraw_statuslines();
@@ -1277,20 +1270,22 @@ main_loop(
 	    may_clear_sb_text();	/* clear scroll-back text on next msg */
 	    showruler(FALSE);
 
-# if defined(FEAT_CONCEAL)
+#if defined(FEAT_CONCEAL)
 	    if (conceal_update_lines
 		    && (conceal_old_cursor_line != conceal_new_cursor_line
 			|| conceal_cursor_line(curwin)
 			|| need_cursor_line_redraw))
 	    {
+		mch_disable_flush();	/* Stop issuing gui_mch_flush(). */
 		if (conceal_old_cursor_line != conceal_new_cursor_line
 			&& conceal_old_cursor_line
 						<= curbuf->b_ml.ml_line_count)
 		    update_single_line(curwin, conceal_old_cursor_line);
 		update_single_line(curwin, conceal_new_cursor_line);
+		mch_enable_flush();
 		curwin->w_valid &= ~VALID_CROW;
 	    }
-# endif
+#endif
 	    setcursor();
 	    cursor_on();
 
@@ -1388,11 +1383,10 @@ getout_preserve_modified(int exitval)
     void
 getout(int exitval)
 {
-#ifdef FEAT_AUTOCMD
+    tabpage_T	*tp;
+    tabpage_T	*next_tp;
     buf_T	*buf;
     win_T	*wp;
-    tabpage_T	*tp, *next_tp;
-#endif
 
     exiting = TRUE;
 
@@ -1417,8 +1411,7 @@ getout(int exitval)
     msg_didany = FALSE;
 #endif
 
-#ifdef FEAT_AUTOCMD
-    if (get_vim_var_nr(VV_DYING) <= 1)
+    if (v_dying <= 1)
     {
 	/* Trigger BufWinLeave for all windows, but only once per buffer. */
 	for (tp = first_tabpage; tp != NULL; tp = next_tp)
@@ -1432,9 +1425,14 @@ getout(int exitval)
 		buf = wp->w_buffer;
 		if (CHANGEDTICK(buf) != -1)
 		{
+		    bufref_T bufref;
+
+		    set_bufref(&bufref, buf);
 		    apply_autocmds(EVENT_BUFWINLEAVE, buf->b_fname,
 						    buf->b_fname, FALSE, buf);
-		    CHANGEDTICK(buf) = -1;  /* note that we did it already */
+		    if (bufref_valid(&bufref))
+			CHANGEDTICK(buf) = -1;  /* note we did it already */
+
 		    /* start all over, autocommands may mess up the lists */
 		    next_tp = first_tabpage;
 		    break;
@@ -1457,7 +1455,6 @@ getout(int exitval)
 	    }
 	apply_autocmds(EVENT_VIMLEAVEPRE, NULL, NULL, FALSE, curbuf);
     }
-#endif
 
 #ifdef FEAT_VIMINFO
     if (*p_viminfo != NUL)
@@ -1465,10 +1462,8 @@ getout(int exitval)
 	write_viminfo(NULL, FALSE);
 #endif
 
-#ifdef FEAT_AUTOCMD
-    if (get_vim_var_nr(VV_DYING) <= 1)
+    if (v_dying <= 1)
 	apply_autocmds(EVENT_VIMLEAVE, NULL, NULL, FALSE, curbuf);
-#endif
 
 #ifdef FEAT_PROFILE
     profile_dump();
@@ -1485,13 +1480,11 @@ getout(int exitval)
 	wait_return(FALSE);
     }
 
-#ifdef FEAT_AUTOCMD
     /* Position the cursor again, the autocommands may have moved it */
-# ifdef FEAT_GUI
+#ifdef FEAT_GUI
     if (!gui.in_use)
-# endif
-	windgoto((int)Rows - 1, 0);
 #endif
+	windgoto((int)Rows - 1, 0);
 
 #ifdef FEAT_JOB_CHANNEL
     job_stop_on_exit();
@@ -1888,6 +1881,7 @@ command_line_scan(mparm_T *parmp)
 		else if (STRNICMP(argv[0] + argv_idx, "clean", 5) == 0)
 		{
 		    parmp->use_vimrc = (char_u *)"DEFAULTS";
+		    parmp->clean = TRUE;
 		    set_option_value((char_u *)"vif", 0L, (char_u *)"NONE", 0);
 		}
 		else if (STRNICMP(argv[0] + argv_idx, "literal", 7) == 0)
@@ -2521,7 +2515,7 @@ scripterror:
 
 /*
  * Print a warning if stdout is not a terminal.
- * When starting in Ex mode and commands come from a file, set Silent mode.
+ * When starting in Ex mode and commands come from a file, set silent_mode.
  */
     static void
 check_tty(mparm_T *parmp)
@@ -2678,13 +2672,11 @@ create_windows(mparm_T *parmp UNUSED)
 	 * Commands in the .vimrc might have loaded a file or split the window.
 	 * Watch out for autocommands that delete a window.
 	 */
-#ifdef FEAT_AUTOCMD
 	/*
 	 * Don't execute Win/Buf Enter/Leave autocommands here
 	 */
 	++autocmd_no_enter;
 	++autocmd_no_leave;
-#endif
 	dorewind = TRUE;
 	while (done++ < 1000)
 	{
@@ -2744,9 +2736,7 @@ create_windows(mparm_T *parmp UNUSED)
 		else
 		    handle_swap_exists(NULL);
 #endif
-#ifdef FEAT_AUTOCMD
 		dorewind = TRUE;		/* start again */
-#endif
 	    }
 	    ui_breakcheck();
 	    if (got_int)
@@ -2760,10 +2750,8 @@ create_windows(mparm_T *parmp UNUSED)
 	else
 	    curwin = firstwin;
 	curbuf = curwin->w_buffer;
-#ifdef FEAT_AUTOCMD
 	--autocmd_no_enter;
 	--autocmd_no_leave;
-#endif
     }
 }
 
@@ -2781,13 +2769,11 @@ edit_buffers(
     int		advance = TRUE;
     win_T	*win;
 
-# ifdef FEAT_AUTOCMD
     /*
      * Don't execute Win/Buf Enter/Leave autocommands here
      */
     ++autocmd_no_enter;
     ++autocmd_no_leave;
-# endif
 
     /* When w_arg_idx is -1 remove the window (see create_windows()). */
     if (curwin->w_arg_idx == -1)
@@ -2868,9 +2854,7 @@ edit_buffers(
 
     if (parmp->window_layout == WIN_TABS)
 	goto_tabpage(1);
-# ifdef FEAT_AUTOCMD
     --autocmd_no_enter;
-# endif
 
     /* make the first window the current window */
     win = firstwin;
@@ -2888,9 +2872,7 @@ edit_buffers(
 #endif
     win_enter(win, FALSE);
 
-#ifdef FEAT_AUTOCMD
     --autocmd_no_leave;
-#endif
     TIME_MSG("editing files in windows");
     if (parmp->window_count > 1 && parmp->window_layout != WIN_TABS)
 	win_equal(curwin, FALSE, 'b');	/* adjust heights */
@@ -3936,8 +3918,7 @@ cmdsrv_main(
 		{
 		    /* Output error from remote */
 		    mch_errmsg((char *)res);
-		    vim_free(res);
-		    res = NULL;
+		    VIM_CLEAR(res);
 		}
 		mch_errmsg(_(": Send expression failed.\n"));
 	    }
@@ -4207,11 +4188,7 @@ eval_client_expr_to_string(char_u *expr)
     /* A client can tell us to redraw, but not to display the cursor, so do
      * that here. */
     setcursor();
-    out_flush();
-#ifdef FEAT_GUI
-    if (gui.in_use)
-	gui_update_cursor(FALSE, FALSE);
-#endif
+    out_flush_cursor(FALSE, FALSE);
 
     return res;
 }

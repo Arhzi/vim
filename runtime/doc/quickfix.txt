@@ -1,4 +1,4 @@
-*quickfix.txt*  For Vim version 8.0.  Last change: 2017 Sep 13
+*quickfix.txt*  For Vim version 8.0.  Last change: 2018 Mar 04
 
 
 		  VIM REFERENCE MANUAL    by Bram Moolenaar
@@ -63,6 +63,14 @@ window.  The location list is independent of the quickfix list.
 When a window with a location list is split, the new window gets a copy of the
 location list.  When there are no longer any references to a location list,
 the location list is destroyed.
+
+						*quickfix-changedtick*
+Every quickfix and location list has a read-only changedtick variable that
+tracks the total number of changes made to the list.  Every time the quickfix
+list is modified, this count is incremented. This can be used to perform an
+action only when the list has changed.  The getqflist() and getloclist()
+functions can be used to query the current value of changedtick.  You cannot
+change the changedtick variable.
 
 The following quickfix commands can be used.  The location list commands are
 similar to the quickfix commands, replacing the 'c' prefix in the quickfix
@@ -322,9 +330,9 @@ deleted for some reason, the message "line changed" is shown to warn you that
 the error location may not be correct.  If you quit Vim and start again the
 marks are lost and the error locations may not be correct anymore.
 
-If vim is built with |+autocmd| support, two autocommands are available for
-running commands before and after a quickfix command (':make', ':grep' and so
-on) is executed. See |QuickFixCmdPre| and |QuickFixCmdPost| for details.
+Two autocommands are available for running commands before and after a
+quickfix command (':make', ':grep' and so on) is executed. See
+|QuickFixCmdPre| and |QuickFixCmdPost| for details.
 
 						*QuickFixCmdPost-example*
 When 'encoding' differs from the locale, the error messages may have a
@@ -363,7 +371,7 @@ Any Vim type can be associated as a context with a quickfix or location list.
 The |setqflist()| and the |setloclist()| functions can be used to associate a
 context with a quickfix and a location list respectively. The |getqflist()|
 and the |getloclist()| functions can be used to retrieve the context of a
-quickifx and a location list respectively. This is useful for a Vim plugin
+quickfix and a location list respectively. This is useful for a Vim plugin
 dealing with multiple quickfix/location lists.
 Examples: >
 
@@ -376,13 +384,13 @@ Examples: >
 	echo getloclist(2, {'id' : qfid, 'context' : 1})
 <
 							*quickfix-parse*
-You can parse a list of lines using 'erroformat' without creating or modifying
-a quickfix list using the |getqflist()| function. Examples: >
+You can parse a list of lines using 'errorformat' without creating or
+modifying a quickfix list using the |getqflist()| function. Examples: >
 	echo getqflist({'lines' : ["F1:10:Line10", "F2:20:Line20"]})
 	echo getqflist({'lines' : systemlist('grep -Hn quickfix *')})
 This returns a dictionary where the 'items' key contains the list of quickfix
 entries parsed from lines. The following shows how to use a custom
-'errorformat' to parse the lines without modifying the 'erroformat' option: >
+'errorformat' to parse the lines without modifying the 'errorformat' option: >
 	echo getqflist({'efm' : '%f#%l#%m', 'lines' : ['F1#10#Line']})
 <
 
@@ -649,8 +657,8 @@ To get the number of the current list in the stack: >
 4. Using :make						*:make_makeprg*
 
 							*:mak* *:make*
-:mak[e][!] [arguments]	1. If vim was built with |+autocmd|, all relevant
-			   |QuickFixCmdPre| autocommands are executed.
+:mak[e][!] [arguments]	1. All relevant |QuickFixCmdPre| autocommands are
+			   executed.
 			2. If the 'autowrite' option is on, write any changed
 			   buffers
 			3. An errorfile name is made from 'makeef'.  If
@@ -662,9 +670,8 @@ To get the number of the current list in the stack: >
 			   errorfile (for Unix it is also echoed on the
 			   screen).
 			5. The errorfile is read using 'errorformat'.
-			6. If vim was built with |+autocmd|, all relevant
-			   |QuickFixCmdPost| autocommands are executed.
-			   See example below.
+			6. All relevant |QuickFixCmdPost| autocommands are
+			   executed.  See example below.
 			7. If [!] is not given the first error is jumped to.
 			8. The errorfile is deleted.
 			9. You can now move through the errors with commands

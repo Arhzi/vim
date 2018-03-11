@@ -55,6 +55,7 @@ enum {
 static void gui_attempt_start(void);
 
 static int can_update_cursor = TRUE; /* can display the cursor */
+static int disable_flush = 0;	/* If > 0, gui_mch_flush() is disabled. */
 
 /*
  * The Athena scrollbars can move the thumb to after the end of the scrollbar,
@@ -131,13 +132,11 @@ gui_start(void)
 
     vim_free(old_term);
 
-#ifdef FEAT_AUTOCMD
     /* If the GUI started successfully, trigger the GUIEnter event, otherwise
      * the GUIFailed event. */
     gui_mch_update();
     apply_autocmds(gui.in_use ? EVENT_GUIENTER : EVENT_GUIFAILED,
 						   NULL, NULL, FALSE, curbuf);
-#endif
     --recursive;
 }
 
@@ -1078,7 +1077,7 @@ gui_update_cursor(
 	gui_undraw_cursor();
 	if (gui.row < 0)
 	    return;
-#ifdef FEAT_MBYTE
+#ifdef HAVE_INPUT_METHOD
 	if (gui.row != gui.cursor_row || gui.col != gui.cursor_col)
 	    im_set_position(gui.row, gui.col);
 #endif
@@ -1123,7 +1122,7 @@ gui_update_cursor(
 			     shape->blinkoff);
 	if (shape->blinkwait == 0 || shape->blinkon == 0
 						       || shape->blinkoff == 0)
-	    gui_mch_stop_blink();
+	    gui_mch_stop_blink(FALSE);
 #ifdef FEAT_TERMINAL
 	if (shape_bg != INVALCOLOR)
 	{
@@ -1136,13 +1135,13 @@ gui_update_cursor(
 	if (id > 0)
 	{
 	    cattr = syn_id2colors(id, &cfg, &cbg);
-#if defined(FEAT_MBYTE) || defined(FEAT_HANGULIN)
+#if defined(HAVE_INPUT_METHOD) || defined(FEAT_HANGULIN)
 	    {
 		static int iid;
 		guicolor_T fg, bg;
 
 		if (
-# if defined(FEAT_GUI_GTK) && !defined(FEAT_HANGULIN)
+# if defined(FEAT_GUI_GTK) && defined(FEAT_XIM) && !defined(FEAT_HANGULIN)
 			preedit_get_status()
 # else
 			im_get_status()
@@ -1976,7 +1975,7 @@ gui_write(
     gui.dragged_sb = SBAR_NONE;
 #endif
 
-    gui_mch_flush();		    /* In case vim decides to take a nap */
+    gui_may_flush();		    /* In case vim decides to take a nap */
 }
 
 /*
@@ -2002,6 +2001,34 @@ gui_can_update_cursor(void)
     can_update_cursor = TRUE;
     /* No need to update the cursor right now, there is always more output
      * after scrolling. */
+}
+
+/*
+ * Disable issuing gui_mch_flush().
+ */
+    void
+gui_disable_flush(void)
+{
+    ++disable_flush;
+}
+
+/*
+ * Enable issuing gui_mch_flush().
+ */
+    void
+gui_enable_flush(void)
+{
+    --disable_flush;
+}
+
+/*
+ * Issue gui_mch_flush() if it is not disabled.
+ */
+    void
+gui_may_flush(void)
+{
+    if (disable_flush == 0)
+	gui_mch_flush();
 }
 
     static void
@@ -2885,6 +2912,20 @@ gui_insert_lines(int row, int count)
     }
 }
 
+#ifdef FEAT_TIMERS
+/*
+ * Passed to ui_wait_for_chars_or_timer(), ignoring extra arguments.
+ */
+    static int
+gui_wait_for_chars_3(
+    long wtime,
+    int *interrupted UNUSED,
+    int ignore_input UNUSED)
+{
+    return gui_mch_wait_for_chars(wtime);
+}
+#endif
+
 /*
  * Returns OK if a character was found to be available within the given time,
  * or FAIL otherwise.
@@ -2893,32 +2934,7 @@ gui_insert_lines(int row, int count)
 gui_wait_for_chars_or_timer(long wtime)
 {
 #ifdef FEAT_TIMERS
-    int	    due_time;
-    long    remaining = wtime;
-    int	    tb_change_cnt = typebuf.tb_change_cnt;
-
-    /* When waiting very briefly don't trigger timers. */
-    if (wtime >= 0 && wtime < 10L)
-	return gui_mch_wait_for_chars(wtime);
-
-    while (wtime < 0 || remaining > 0)
-    {
-	/* Trigger timers and then get the time in wtime until the next one is
-	 * due.  Wait up to that time. */
-	due_time = check_due_timer();
-	if (typebuf.tb_change_cnt != tb_change_cnt)
-	{
-	    /* timer may have used feedkeys() */
-	    return FAIL;
-	}
-	if (due_time <= 0 || (wtime > 0 && due_time > remaining))
-	    due_time = remaining;
-	if (gui_mch_wait_for_chars(due_time))
-	    return OK;
-	if (wtime > 0)
-	    remaining -= due_time;
-    }
-    return FAIL;
+    return ui_wait_for_chars_or_timer(wtime, gui_wait_for_chars_3, NULL, 0);
 #else
     return gui_mch_wait_for_chars(wtime);
 #endif
@@ -2933,10 +2949,12 @@ gui_wait_for_chars_or_timer(long wtime)
  * or FAIL otherwise.
  */
     int
-gui_wait_for_chars(long wtime)
+gui_wait_for_chars(long wtime, int tb_change_cnt)
 {
     int	    retval;
-    int	    tb_change_cnt = typebuf.tb_change_cnt;
+#if defined(ELAPSED_FUNC)
+    ELAPSED_TYPE start_tv;
+#endif
 
 #ifdef FEAT_MENU
     /*
@@ -2962,9 +2980,13 @@ gui_wait_for_chars(long wtime)
 	 * for showmatch() */
 	gui_mch_start_blink();
 	retval = gui_wait_for_chars_or_timer(wtime);
-	gui_mch_stop_blink();
+	gui_mch_stop_blink(TRUE);
 	return retval;
     }
+
+#if defined(ELAPSED_FUNC)
+    ELAPSED_INIT(start_tv);
+#endif
 
     /*
      * While we are waiting indefinitely for a character, blink the cursor.
@@ -2974,13 +2996,16 @@ gui_wait_for_chars(long wtime)
     retval = FAIL;
     /*
      * We may want to trigger the CursorHold event.  First wait for
-     * 'updatetime' and if nothing is typed within that time put the
-     * K_CURSORHOLD key in the input buffer.
+     * 'updatetime' and if nothing is typed within that time, and feedkeys()
+     * wasn't used, put the K_CURSORHOLD key in the input buffer.
      */
     if (gui_wait_for_chars_or_timer(p_ut) == OK)
 	retval = OK;
-#ifdef FEAT_AUTOCMD
-    else if (trigger_cursorhold())
+    else if (trigger_cursorhold()
+#ifdef ELAPSED_FUNC
+	    && ELAPSED_FUNC(start_tv) >= p_ut
+#endif
+	    && typebuf.tb_change_cnt == tb_change_cnt)
     {
 	char_u	buf[3];
 
@@ -2992,7 +3017,6 @@ gui_wait_for_chars(long wtime)
 
 	retval = OK;
     }
-#endif
 
     if (retval == FAIL && typebuf.tb_change_cnt == tb_change_cnt)
     {
@@ -3001,8 +3025,24 @@ gui_wait_for_chars(long wtime)
 	retval = gui_wait_for_chars_or_timer(-1L);
     }
 
-    gui_mch_stop_blink();
+    gui_mch_stop_blink(TRUE);
     return retval;
+}
+
+/*
+ * Equivalent of mch_inchar() for the GUI.
+ */
+    int
+gui_inchar(
+    char_u  *buf,
+    int	    maxlen,
+    long    wtime,		/* milli seconds */
+    int	    tb_change_cnt)
+{
+    if (gui_wait_for_chars(wtime, tb_change_cnt)
+	    && !typebuf_changed(tb_change_cnt))
+	return read_from_input_buf(buf, (long)maxlen);
+    return 0;
 }
 
 /*
@@ -3667,7 +3707,6 @@ gui_update_tabline(void)
 	/* Updating the tabline uses direct GUI commands, flush
 	 * outstanding instructions first. (esp. clear screen) */
 	out_flush();
-	gui_mch_flush();
 
 	if (!showit != !shown)
 	    gui_mch_show_tabline(showit);
@@ -3920,9 +3959,7 @@ gui_drag_scrollbar(scrollbar_T *sb, long value, int still_dragging)
     int		sb_num;
 #ifdef USE_ON_FLY_SCROLL
     colnr_T	old_leftcol = curwin->w_leftcol;
-# ifdef FEAT_SCROLLBIND
     linenr_T	old_topline = curwin->w_topline;
-# endif
 # ifdef FEAT_DIFF
     int		old_topfill = curwin->w_topfill;
 # endif
@@ -4087,16 +4124,15 @@ gui_drag_scrollbar(scrollbar_T *sb, long value, int still_dragging)
     }
 
 #ifdef USE_ON_FLY_SCROLL
-# ifdef FEAT_SCROLLBIND
     /*
      * synchronize other windows, as necessary according to 'scrollbind'
      */
     if (curwin->w_p_scb
 	    && ((sb->wp == NULL && curwin->w_leftcol != old_leftcol)
 		|| (sb->wp == curwin && (curwin->w_topline != old_topline
-#  ifdef FEAT_DIFF
+# ifdef FEAT_DIFF
 					   || curwin->w_topfill != old_topfill
-#  endif
+# endif
 			))))
     {
 	do_check_scrollbind(TRUE);
@@ -4106,9 +4142,7 @@ gui_drag_scrollbar(scrollbar_T *sb, long value, int still_dragging)
 		updateWindow(wp);
 	setcursor();
     }
-# endif
-    out_flush();
-    gui_update_cursor(FALSE, TRUE);
+    out_flush_cursor(FALSE, TRUE);
 #else
     add_to_input_buf(bytes, byte_count);
     add_long_to_buf((long_u)value, bytes);
@@ -4436,9 +4470,7 @@ gui_do_scroll(void)
 	}
 	if (old_cursor.lnum != wp->w_cursor.lnum)
 	    coladvance(wp->w_curswant);
-#ifdef FEAT_SCROLLBIND
 	wp->w_scbind_pos = wp->w_topline;
-#endif
     }
 
     /* Make sure wp->w_leftcol and wp->w_skipcol are correct. */
@@ -4471,7 +4503,9 @@ gui_do_scroll(void)
 	 * disappear when losing focus after a scrollbar drag. */
 	if (wp->w_redr_type < type)
 	    wp->w_redr_type = type;
+	mch_disable_flush();
 	updateWindow(wp);   /* update window, status line, and cmdline */
+	mch_enable_flush();
     }
 
 #ifdef FEAT_INS_EXPAND
@@ -4782,8 +4816,7 @@ gui_focus_change(int in_focus)
  */
 #if 1
     gui.in_focus = in_focus;
-    out_flush();		/* make sure output has been written */
-    gui_update_cursor(TRUE, FALSE);
+    out_flush_cursor(TRUE, FALSE);
 
 # ifdef FEAT_XIM
     xim_set_focus(in_focus);
@@ -5088,34 +5121,24 @@ no_console_input(void)
     void
 gui_update_screen(void)
 {
-#ifdef FEAT_CONCEAL
+# ifdef FEAT_CONCEAL
     linenr_T	conceal_old_cursor_line = 0;
     linenr_T	conceal_new_cursor_line = 0;
     int		conceal_update_lines = FALSE;
-#endif
+# endif
 
     update_topline();
     validate_cursor();
 
-#if defined(FEAT_AUTOCMD) || defined(FEAT_CONCEAL)
     /* Trigger CursorMoved if the cursor moved. */
-    if (!finish_op && (
-# ifdef FEAT_AUTOCMD
-		has_cursormoved()
-# endif
-# if defined(FEAT_AUTOCMD) && defined(FEAT_CONCEAL)
-		||
-# endif
+    if (!finish_op && (has_cursormoved()
 # ifdef FEAT_CONCEAL
-		curwin->w_p_cole > 0
+		|| curwin->w_p_cole > 0
 # endif
-		)
-		     && !EQUAL_POS(last_cursormoved, curwin->w_cursor))
+		) && !EQUAL_POS(last_cursormoved, curwin->w_cursor))
     {
-# ifdef FEAT_AUTOCMD
 	if (has_cursormoved())
 	    apply_autocmds(EVENT_CURSORMOVED, NULL, NULL, FALSE, curbuf);
-# endif
 # ifdef FEAT_CONCEAL
 	if (curwin->w_p_cole > 0)
 	{
@@ -5126,11 +5149,10 @@ gui_update_screen(void)
 # endif
 	last_cursormoved = curwin->w_cursor;
     }
-#endif
 
     update_screen(0);	/* may need to update the screen */
     setcursor();
-# if defined(FEAT_CONCEAL)
+# ifdef FEAT_CONCEAL
     if (conceal_update_lines
 	    && (conceal_old_cursor_line != conceal_new_cursor_line
 		|| conceal_cursor_line(curwin)
@@ -5142,9 +5164,7 @@ gui_update_screen(void)
 	curwin->w_valid &= ~VALID_CROW;
     }
 # endif
-    out_flush();		/* make sure output has been written */
-    gui_update_cursor(TRUE, FALSE);
-    gui_mch_flush();
+    out_flush_cursor(TRUE, FALSE);
 }
 #endif
 
@@ -5487,7 +5507,7 @@ gui_handle_drop(
 		if (mch_chdir((char *)p) == 0)
 		    shorten_fnames(TRUE);
 	    }
-	    else if (vim_chdirfile(p) == OK)
+	    else if (vim_chdirfile(p, "drop") == OK)
 		shorten_fnames(TRUE);
 	    vim_free(p);
 	}
@@ -5501,9 +5521,7 @@ gui_handle_drop(
 	maketitle();
 #endif
 	setcursor();
-	out_flush();
-	gui_update_cursor(FALSE, FALSE);
-	gui_mch_flush();
+	out_flush_cursor(FALSE, FALSE);
     }
 
     entered = FALSE;

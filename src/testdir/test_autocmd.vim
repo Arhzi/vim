@@ -812,6 +812,18 @@ func Test_QuitPre()
 endfunc
 
 func Test_Cmdline()
+  au! CmdlineChanged : let g:text = getcmdline()
+  let g:text = 0
+  call feedkeys(":echom 'hello'\<CR>", 'xt')
+  call assert_equal("echom 'hello'", g:text)
+  au! CmdlineChanged
+
+  au! CmdlineChanged : let g:entered = expand('<afile>')
+  let g:entered = 0
+  call feedkeys(":echom 'hello'\<CR>", 'xt')
+  call assert_equal(':', g:entered)
+  au! CmdlineChanged
+
   au! CmdlineEnter : let g:entered = expand('<afile>')
   au! CmdlineLeave : let g:left = expand('<afile>')
   let g:entered = 0
@@ -1123,4 +1135,172 @@ func Test_Filter_noshelltemp()
   au! FilterWritePre,FilterReadPre,FilterReadPost
   let &shelltemp = shelltemp
   bwipe!
+endfunc
+
+func Test_TextYankPost()
+  enew!
+  call setline(1, ['foo'])
+
+  let g:event = []
+  au TextYankPost * let g:event = copy(v:event)
+
+  call assert_equal({}, v:event)
+  call assert_fails('let v:event = {}', 'E46:')
+  call assert_fails('let v:event.mykey = 0', 'E742:')
+
+  norm "ayiw
+  call assert_equal(
+    \{'regcontents': ['foo'], 'regname': 'a', 'operator': 'y', 'regtype': 'v'},
+    \g:event)
+  norm y_
+  call assert_equal(
+    \{'regcontents': ['foo'], 'regname': '',  'operator': 'y', 'regtype': 'V'},
+    \g:event)
+  call feedkeys("\<C-V>y", 'x')
+  call assert_equal(
+    \{'regcontents': ['f'], 'regname': '',  'operator': 'y', 'regtype': "\x161"},
+    \g:event)
+  norm "xciwbar
+  call assert_equal(
+    \{'regcontents': ['foo'], 'regname': 'x', 'operator': 'c', 'regtype': 'v'},
+    \g:event)
+  norm "bdiw
+  call assert_equal(
+    \{'regcontents': ['bar'], 'regname': 'b', 'operator': 'd', 'regtype': 'v'},
+    \g:event)
+
+  call assert_equal({}, v:event)
+
+  au! TextYankPost
+  unlet g:event
+  bwipe!
+endfunc
+
+func Test_nocatch_wipe_all_buffers()
+  " Real nasty autocommand: wipe all buffers on any event.
+  au * * bwipe *
+  call assert_fails('next x', 'E93')
+  bwipe
+  au!
+endfunc
+
+func Test_nocatch_wipe_dummy_buffer()
+  " Nasty autocommand: wipe buffer on any event.
+  au * x bwipe
+  call assert_fails('lv½ /x', 'E480')
+  au!
+endfunc
+
+function s:Before_test_dirchanged()
+  augroup test_dirchanged
+    autocmd!
+  augroup END
+  let s:li = []
+  let s:dir_this = getcwd()
+  let s:dir_other = s:dir_this . '/foo'
+  call mkdir(s:dir_other)
+endfunc
+
+function s:After_test_dirchanged()
+  exe 'cd' s:dir_this
+  call delete(s:dir_other, 'd')
+  augroup test_dirchanged
+    autocmd!
+  augroup END
+endfunc
+
+function Test_dirchanged_global()
+  call s:Before_test_dirchanged()
+  autocmd test_dirchanged DirChanged global call add(s:li, "cd:")
+  autocmd test_dirchanged DirChanged global call add(s:li, expand("<afile>"))
+  exe 'cd' s:dir_other
+  call assert_equal(["cd:", s:dir_other], s:li)
+  exe 'lcd' s:dir_other
+  call assert_equal(["cd:", s:dir_other], s:li)
+  call s:After_test_dirchanged()
+endfunc
+
+function Test_dirchanged_local()
+  call s:Before_test_dirchanged()
+  autocmd test_dirchanged DirChanged window call add(s:li, "lcd:")
+  autocmd test_dirchanged DirChanged window call add(s:li, expand("<afile>"))
+  exe 'cd' s:dir_other
+  call assert_equal([], s:li)
+  exe 'lcd' s:dir_other
+  call assert_equal(["lcd:", s:dir_other], s:li)
+  call s:After_test_dirchanged()
+endfunc
+
+function Test_dirchanged_auto()
+  if !exists('+autochdir')
+    return
+  endif
+  call s:Before_test_dirchanged()
+  call test_autochdir()
+  autocmd test_dirchanged DirChanged auto call add(s:li, "auto:")
+  autocmd test_dirchanged DirChanged auto call add(s:li, expand("<afile>"))
+  set acd
+  exe 'cd ..'
+  call assert_equal([], s:li)
+  exe 'edit ' . s:dir_other . '/Xfile'
+  call assert_equal(s:dir_other, getcwd())
+  call assert_equal(["auto:", s:dir_other], s:li)
+  set noacd
+  bwipe!
+  call s:After_test_dirchanged()
+endfunc
+
+" Test TextChangedI and TextChangedP
+func Test_ChangedP()
+  new
+  call setline(1, ['foo', 'bar', 'foobar'])
+  call test_override("char_avail", 1)
+  set complete=. completeopt=menuone
+
+  func! TextChangedAutocmd(char)
+    let g:autocmd .= a:char
+  endfunc
+
+  au! TextChanged <buffer> :call TextChangedAutocmd('N')
+  au! TextChangedI <buffer> :call TextChangedAutocmd('I')
+  au! TextChangedP <buffer> :call TextChangedAutocmd('P')
+
+  call cursor(3, 1)
+  let g:autocmd = ''
+  call feedkeys("o\<esc>", 'tnix')
+  call assert_equal('I', g:autocmd)
+
+  let g:autocmd = ''
+  call feedkeys("Sf", 'tnix')
+  call assert_equal('II', g:autocmd)
+
+  let g:autocmd = ''
+  call feedkeys("Sf\<C-N>", 'tnix')
+  call assert_equal('IIP', g:autocmd)
+
+  let g:autocmd = ''
+  call feedkeys("Sf\<C-N>\<C-N>", 'tnix')
+  call assert_equal('IIPP', g:autocmd)
+
+  let g:autocmd = ''
+  call feedkeys("Sf\<C-N>\<C-N>\<C-N>", 'tnix')
+  call assert_equal('IIPPP', g:autocmd)
+
+  let g:autocmd = ''
+  call feedkeys("Sf\<C-N>\<C-N>\<C-N>\<C-N>", 'tnix')
+  call assert_equal('IIPPPP', g:autocmd)
+
+  call assert_equal(['foo', 'bar', 'foobar', 'foo'], getline(1, '$'))
+  " TODO: how should it handle completeopt=noinsert,noselect?
+
+  " CleanUp
+  call test_override("char_avail", 0)
+  au! TextChanged
+  au! TextChangedI
+  au! TextChangedP
+  delfu TextChangedAutocmd
+  unlet! g:autocmd
+  set complete&vim completeopt&vim
+
+  bw!
 endfunc

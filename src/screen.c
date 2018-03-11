@@ -468,17 +468,14 @@ redraw_after_callback(int call_update_screen)
 	setcursor();
     }
     cursor_on();
-    out_flush();
 #ifdef FEAT_GUI
-    if (gui.in_use)
-    {
+    if (gui.in_use && !gui_mch_is_blink_off())
 	/* Don't update the cursor when it is blinking and off to avoid
 	 * flicker. */
-	if (!gui_mch_is_blink_off())
-	    gui_update_cursor(FALSE, FALSE);
-	gui_mch_flush();
-    }
+	out_flush_cursor(FALSE, FALSE);
+    else
 #endif
+	out_flush();
 
     --redrawing_for_callback;
 }
@@ -800,9 +797,12 @@ update_screen(int type_arg)
      * done. */
     if (gui.in_use)
     {
-	out_flush();	/* required before updating the cursor */
 	if (did_undraw && !gui_mch_is_blink_off())
 	{
+	    mch_disable_flush();
+	    out_flush();	/* required before updating the cursor */
+	    mch_enable_flush();
+
 	    /* Put the GUI position where the cursor was, gui_update_cursor()
 	     * uses that. */
 	    gui.col = gui_cursor_col;
@@ -811,9 +811,12 @@ update_screen(int type_arg)
 	    gui.col = mb_fix_col(gui.col, gui.row);
 # endif
 	    gui_update_cursor(FALSE, FALSE);
+	    gui_may_flush();
 	    screen_cur_col = gui.col;
 	    screen_cur_row = gui.row;
 	}
+	else
+	    out_flush();
 	gui_update_scrollbars(FALSE);
     }
 #endif
@@ -863,8 +866,7 @@ update_finish(void)
      * done. */
     if (gui.in_use)
     {
-	out_flush();	/* required before updating the cursor */
-	gui_update_cursor(FALSE, FALSE);
+	out_flush_cursor(FALSE, FALSE);
 	gui_update_scrollbars(FALSE);
     }
 # endif
@@ -1174,6 +1176,11 @@ win_update(win_T *wp)
      */
     if (term_update_window(wp) == OK)
     {
+# ifdef FEAT_MENU
+	/* Draw the window toolbar, if there is one. */
+	if (winbar_height(wp) > 0)
+	    redraw_win_toolbar(wp);
+# endif
 	wp->w_redr_type = 0;
 	return;
     }
@@ -2170,6 +2177,25 @@ win_update(win_T *wp)
      * End of loop over all window lines.
      */
 
+#ifdef FEAT_VTP
+    /* Rewrite the character at the end of the screen line. */
+    if (use_vtp())
+    {
+	int i;
+
+	for (i = 0; i < Rows; ++i)
+# ifdef FEAT_MBYTE
+	    if (enc_utf8)
+		if ((*mb_off2cells)(LineOffset[i] + Columns - 2,
+					   LineOffset[i] + screen_Columns) > 1)
+		    screen_draw_rectangle(i, Columns - 2, 1, 2, FALSE);
+		else
+		    screen_draw_rectangle(i, Columns - 1, 1, 1, FALSE);
+	    else
+# endif
+		screen_char(LineOffset[i] + Columns - 1, i, Columns - 1);
+    }
+#endif
 
     if (idx > wp->w_lines_valid)
 	wp->w_lines_valid = idx;
@@ -2792,7 +2818,7 @@ fold_line(
 	    {
 		ScreenLinesUC[off + col] = fill_fold;
 		ScreenLinesC[0][off + col] = 0;
-                ScreenLines[off + col] = 0x80; /* avoid storing zero */
+		ScreenLines[off + col] = 0x80; /* avoid storing zero */
 	    }
 	    else
 	    {
@@ -4324,10 +4350,7 @@ win_line(
 #endif
 
 	    if (p_extra_free != NULL)
-	    {
-		vim_free(p_extra_free);
-		p_extra_free = NULL;
-	    }
+		VIM_CLEAR(p_extra_free);
 	    /*
 	     * Get a character from the line itself.
 	     */
@@ -8041,34 +8064,31 @@ screen_start_highlight(int attr)
 		else
 		    attr = aep->ae_attr;
 	    }
-	    if ((attr & HL_BOLD) && T_MD != NULL)	/* bold */
+	    if ((attr & HL_BOLD) && *T_MD != NUL)	/* bold */
 		out_str(T_MD);
-	    else if (aep != NULL && cterm_normal_fg_bold &&
+	    else if (aep != NULL && cterm_normal_fg_bold && (
 #ifdef FEAT_TERMGUICOLORS
-			(p_tgc ?
-			    (aep->ae_u.cterm.fg_rgb != INVALCOLOR):
+			p_tgc && aep->ae_u.cterm.fg_rgb != CTERMCOLOR
+			  ? aep->ae_u.cterm.fg_rgb != INVALCOLOR
+			  :
 #endif
-			    (t_colors > 1 && aep->ae_u.cterm.fg_color)
-#ifdef FEAT_TERMGUICOLORS
-			)
-#endif
-		    )
+			    t_colors > 1 && aep->ae_u.cterm.fg_color))
 		/* If the Normal FG color has BOLD attribute and the new HL
 		 * has a FG color defined, clear BOLD. */
 		out_str(T_ME);
-	    if ((attr & HL_STANDOUT) && T_SO != NULL)	/* standout */
+	    if ((attr & HL_STANDOUT) && *T_SO != NUL)	/* standout */
 		out_str(T_SO);
-	    if ((attr & HL_UNDERCURL) && T_UCS != NULL) /* undercurl */
+	    if ((attr & HL_UNDERCURL) && *T_UCS != NUL) /* undercurl */
 		out_str(T_UCS);
 	    if (((attr & HL_UNDERLINE)	    /* underline or undercurl */
-			|| ((attr & HL_UNDERCURL) && T_UCS == NULL))
-		    && T_US != NULL)
+			|| ((attr & HL_UNDERCURL) && *T_UCS == NUL))
+		    && *T_US != NUL)
 		out_str(T_US);
-	    if ((attr & HL_ITALIC) && T_CZH != NULL)	/* italic */
+	    if ((attr & HL_ITALIC) && *T_CZH != NUL)	/* italic */
 		out_str(T_CZH);
-	    if ((attr & HL_INVERSE) && T_MR != NULL)	/* inverse (reverse) */
+	    if ((attr & HL_INVERSE) && *T_MR != NUL)	/* inverse (reverse) */
 		out_str(T_MR);
-	    if ((attr & HL_STRIKETHROUGH) && T_STS != NULL)	/* strike */
+	    if ((attr & HL_STRIKETHROUGH) && *T_STS != NUL)	/* strike */
 		out_str(T_STS);
 
 	    /*
@@ -8078,28 +8098,39 @@ screen_start_highlight(int attr)
 	    if (aep != NULL)
 	    {
 #ifdef FEAT_TERMGUICOLORS
-		if (p_tgc)
+		/* When 'termguicolors' is set but fg or bg is unset,
+		 * fall back to the cterm colors.   This helps for SpellBad,
+		 * where the GUI uses a red undercurl. */
+		if (p_tgc && aep->ae_u.cterm.fg_rgb != CTERMCOLOR)
 		{
 		    if (aep->ae_u.cterm.fg_rgb != INVALCOLOR)
 			term_fg_rgb_color(aep->ae_u.cterm.fg_rgb);
+		}
+		else
+#endif
+		if (t_colors > 1)
+		{
+		    if (aep->ae_u.cterm.fg_color)
+			term_fg_color(aep->ae_u.cterm.fg_color - 1);
+		}
+#ifdef FEAT_TERMGUICOLORS
+		if (p_tgc && aep->ae_u.cterm.bg_rgb != CTERMCOLOR)
+		{
 		    if (aep->ae_u.cterm.bg_rgb != INVALCOLOR)
 			term_bg_rgb_color(aep->ae_u.cterm.bg_rgb);
 		}
 		else
 #endif
+		if (t_colors > 1)
 		{
-		    if (t_colors > 1)
-		    {
-			if (aep->ae_u.cterm.fg_color)
-			    term_fg_color(aep->ae_u.cterm.fg_color - 1);
-			if (aep->ae_u.cterm.bg_color)
-			    term_bg_color(aep->ae_u.cterm.bg_color - 1);
-		    }
-		    else
-		    {
-			if (aep->ae_u.term.start != NULL)
-			    out_str(aep->ae_u.term.start);
-		    }
+		    if (aep->ae_u.cterm.bg_color)
+			term_bg_color(aep->ae_u.cterm.bg_color - 1);
+		}
+
+		if (t_colors <= 1)
+		{
+		    if (aep->ae_u.term.start != NULL)
+			out_str(aep->ae_u.term.start);
 		}
 	    }
 	}
@@ -8139,17 +8170,19 @@ screen_stop_highlight(void)
 		     * Assume that t_me restores the original colors!
 		     */
 		    aep = syn_cterm_attr2entry(screen_attr);
-		    if (aep != NULL &&
+		    if (aep != NULL && ((
 #ifdef FEAT_TERMGUICOLORS
-			    (p_tgc ?
-				(aep->ae_u.cterm.fg_rgb != INVALCOLOR
-				 || aep->ae_u.cterm.bg_rgb != INVALCOLOR):
+			    p_tgc && aep->ae_u.cterm.fg_rgb != CTERMCOLOR
+				? aep->ae_u.cterm.fg_rgb != INVALCOLOR
+				:
 #endif
-				(aep->ae_u.cterm.fg_color || aep->ae_u.cterm.bg_color)
+				aep->ae_u.cterm.fg_color) || (
 #ifdef FEAT_TERMGUICOLORS
-			    )
+			    p_tgc && aep->ae_u.cterm.bg_rgb != CTERMCOLOR
+				? aep->ae_u.cterm.bg_rgb != INVALCOLOR
+				:
 #endif
-			)
+				aep->ae_u.cterm.bg_color)))
 			do_ME = TRUE;
 		}
 		else
@@ -8180,7 +8213,7 @@ screen_stop_highlight(void)
 		else
 		    out_str(T_SE);
 	    }
-	    if ((screen_attr & HL_UNDERCURL) && T_UCE != NULL)
+	    if ((screen_attr & HL_UNDERCURL) && *T_UCE != NUL)
 	    {
 		if (STRCMP(T_UCE, T_ME) == 0)
 		    do_ME = TRUE;
@@ -8188,7 +8221,7 @@ screen_stop_highlight(void)
 		    out_str(T_UCE);
 	    }
 	    if ((screen_attr & HL_UNDERLINE)
-			    || ((screen_attr & HL_UNDERCURL) && T_UCE == NULL))
+			    || ((screen_attr & HL_UNDERCURL) && *T_UCE == NUL))
 	    {
 		if (STRCMP(T_UE, T_ME) == 0)
 		    do_ME = TRUE;
@@ -8317,15 +8350,29 @@ screen_char(unsigned off, int row, int col)
     {
 	char_u	    buf[MB_MAXBYTES + 1];
 
-	/* Convert UTF-8 character to bytes and write it. */
-
-	buf[utfc_char2bytes(off, buf)] = NUL;
-
-	out_str(buf);
 	if (utf_ambiguous_width(ScreenLinesUC[off]))
+	{
+	    if (*p_ambw == 'd'
+# ifdef FEAT_GUI
+		    && !gui.in_use
+# endif
+		    )
+	    {
+		/* Clear the two screen cells. If the character is actually
+		 * single width it won't change the second cell. */
+		out_str((char_u *)"  ");
+		term_windgoto(row, col);
+	    }
+	    /* not sure where the cursor is after drawing the ambiguous width
+	     * character */
 	    screen_cur_col = 9999;
+	}
 	else if (utf_char2cells(ScreenLinesUC[off]) > 1)
 	    ++screen_cur_col;
+
+	/* Convert the UTF-8 character to bytes and write it. */
+	buf[utfc_char2bytes(off, buf)] = NUL;
+	out_str(buf);
     }
     else
 #endif
@@ -8720,11 +8767,9 @@ screenalloc(int doclear)
     tabpage_T	    *tp;
     static int	    entered = FALSE;		/* avoid recursiveness */
     static int	    done_outofmem_msg = FALSE;	/* did outofmem message */
-#ifdef FEAT_AUTOCMD
     int		    retry_count = 0;
 
 retry:
-#endif
     /*
      * Allocation of the screen buffers is done only when the size changes and
      * when Rows and Columns have been set and we have started doing full
@@ -8776,10 +8821,8 @@ retry:
      */
     FOR_ALL_TAB_WINDOWS(tp, wp)
 	win_free_lsize(wp);
-#ifdef FEAT_AUTOCMD
     if (aucmd_win != NULL)
 	win_free_lsize(aucmd_win);
-#endif
 
     new_ScreenLines = (schar_T *)lalloc((long_u)(
 			      (Rows + 1) * Columns * sizeof(schar_T)), FALSE);
@@ -8812,11 +8855,9 @@ retry:
 	    goto give_up;
 	}
     }
-#ifdef FEAT_AUTOCMD
     if (aucmd_win != NULL && aucmd_win->w_lines == NULL
 					&& win_alloc_lines(aucmd_win) == FAIL)
 	outofmem = TRUE;
-#endif
 give_up:
 
 #ifdef FEAT_MBYTE
@@ -8844,27 +8885,17 @@ give_up:
 	     * and over again. */
 	    done_outofmem_msg = TRUE;
 	}
-	vim_free(new_ScreenLines);
-	new_ScreenLines = NULL;
+	VIM_CLEAR(new_ScreenLines);
 #ifdef FEAT_MBYTE
-	vim_free(new_ScreenLinesUC);
-	new_ScreenLinesUC = NULL;
+	VIM_CLEAR(new_ScreenLinesUC);
 	for (i = 0; i < p_mco; ++i)
-	{
-	    vim_free(new_ScreenLinesC[i]);
-	    new_ScreenLinesC[i] = NULL;
-	}
-	vim_free(new_ScreenLines2);
-	new_ScreenLines2 = NULL;
+	    VIM_CLEAR(new_ScreenLinesC[i]);
+	VIM_CLEAR(new_ScreenLines2);
 #endif
-	vim_free(new_ScreenAttrs);
-	new_ScreenAttrs = NULL;
-	vim_free(new_LineOffset);
-	new_LineOffset = NULL;
-	vim_free(new_LineWraps);
-	new_LineWraps = NULL;
-	vim_free(new_TabPageIdxs);
-	new_TabPageIdxs = NULL;
+	VIM_CLEAR(new_ScreenAttrs);
+	VIM_CLEAR(new_LineOffset);
+	VIM_CLEAR(new_LineWraps);
+	VIM_CLEAR(new_TabPageIdxs);
     }
     else
     {
@@ -8995,7 +9026,6 @@ give_up:
     entered = FALSE;
     --RedrawingDisabled;
 
-#ifdef FEAT_AUTOCMD
     /*
      * Do not apply autocommands more than 3 times to avoid an endless loop
      * in case applying autocommands always changes Rows or Columns.
@@ -9007,7 +9037,6 @@ give_up:
 	 * jump back to check if we need to allocate the screen again. */
 	goto retry;
     }
-#endif
 }
 
     void
@@ -9442,7 +9471,17 @@ windgoto(int row, int col)
     void
 setcursor(void)
 {
-    if (redrawing())
+    setcursor_mayforce(FALSE);
+}
+
+/*
+ * Set cursor to its position in the current window.
+ * When "force" is TRUE also when not redrawing.
+ */
+    void
+setcursor_mayforce(int force)
+{
+    if (force || redrawing())
     {
 	validate_cursor();
 	windgoto(W_WINROW(curwin) + curwin->w_wrow,
@@ -10174,7 +10213,7 @@ screen_del_lines(
 }
 
 /*
- * show the current mode and ruler
+ * Show the current mode and ruler.
  *
  * If clear_cmdline is TRUE, clear the rest of the cmdline.
  * If clear_cmdline is FALSE there may be a message there that needs to be
@@ -10283,7 +10322,6 @@ showmode(void)
 			msg_puts_attr(edit_submode_extra, sub_attr);
 		    }
 		}
-		length = 0;
 	    }
 	    else
 #endif

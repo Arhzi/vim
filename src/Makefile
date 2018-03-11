@@ -651,12 +651,16 @@ LINT_OPTIONS = -beprxzF
 
 # PROFILING - Uncomment the next two lines to do profiling with gcc and gprof.
 # Might not work with GUI or Perl.
-# For unknown reasons adding "-lc" fixes a linking problem with some versions
-# of GCC.  That's probably a bug in the "-pg" implementation.
 # After running Vim see the profile result with: gprof vim gmon.out | vim -
 # Need to recompile everything after changing this: "make clean" "make".
 #PROFILE_CFLAGS = -pg -g -DWE_ARE_PROFILING
 #PROFILE_LIBS = -pg
+
+# GCC 5 and later need the -no-pie argument.
+#PROFILE_LIBS = -pg -no-pie
+
+# For unknown reasons adding "-lc" fixes a linking problem with some versions
+# of GCC.  That's probably a bug in the "-pg" implementation.
 #PROFILE_LIBS = -pg -lc
 
 
@@ -2101,11 +2105,10 @@ run_message_test: $(MESSAGE_TEST_TARGET)
 # These do not depend on the executable, compile it when needed.
 test1 \
 	test_eval \
-	test_wordcount \
-	test3 test11 test14 test15 test17 \
-	test29 test30 test36 test37 test39 \
+	test3 test11 test14 test17 \
+	test29 test30 test37 test39 \
 	test42 test44 test48 test49 \
-	test50 test52 test59 \
+	test52 test59 \
 	test64 test69 \
 	test70 test72 \
 	test85 test86 test87 test88 \
@@ -2128,6 +2131,7 @@ test_arglist \
 	test_cd \
 	test_cdo \
 	test_changedtick \
+	test_changelist \
 	test_channel \
 	test_charsearch \
 	test_charsearch_utf8 \
@@ -2148,8 +2152,10 @@ test_arglist \
 	test_edit \
 	test_erasebackword \
 	test_escaped_glob \
+	test_eval_stuff \
 	test_ex_undo \
 	test_ex_z \
+	test_exit \
 	test_exec_while_if \
 	test_execute_func \
 	test_exists \
@@ -2198,6 +2204,7 @@ test_arglist \
 	test_job_fails \
 	test_join \
 	test_json \
+	test_jumplist \
 	test_jumps \
 	test_lambda \
 	test_langmap \
@@ -2296,6 +2303,7 @@ test_arglist \
 	test_window_cmd \
 	test_window_id \
 	test_windows_home \
+	test_wordcount \
 	test_writefile \
 	test_alot_latin \
 	test_alot_utf8 \
@@ -2878,6 +2886,7 @@ shadow:	runtime pixmaps
 				 ../../testdir/pyxfile \
 				 ../../testdir/sautest \
 				 ../../testdir/samples \
+				 ../../testdir/dumps \
 				 ../../testdir/test83-tags? \
 				 ../../testdir/*.ok .
 

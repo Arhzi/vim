@@ -799,11 +799,9 @@ codepage_invalid:
 	fix_arg_enc();
 #endif
 
-#ifdef FEAT_AUTOCMD
     /* Fire an autocommand to let people do custom font setup. This must be
      * after Vim has been setup for the new encoding. */
     apply_autocmds(EVENT_ENCODINGCHANGED, NULL, (char_u *)"", FALSE, curbuf);
-#endif
 
 #ifdef FEAT_SPELL
     /* Need to reload spell dictionaries */
@@ -1784,6 +1782,7 @@ dbcs_ptr2char(char_u *p)
  * Convert a UTF-8 byte sequence to a wide character.
  * If the sequence is illegal or truncated by a NUL the first byte is
  * returned.
+ * For an overlong sequence this may return zero.
  * Does not include composing characters, of course.
  */
     int
@@ -2259,7 +2258,6 @@ utf_char2len(int c)
 /*
  * Convert Unicode character "c" to UTF-8 string in "buf[]".
  * Returns the number of bytes.
- * This does not include composing characters.
  */
     int
 utf_char2bytes(int c, char_u *buf)
@@ -4112,7 +4110,10 @@ mb_adjustpos(buf_T *buf, pos_T *lp)
 	    )
     {
 	p = ml_get_buf(buf, lp->lnum, FALSE);
-	lp->col -= (*mb_head_off)(p, p + lp->col);
+	if (*p == NUL || (int)STRLEN(p) < lp->col)
+	    lp->col = 0;
+	else
+	    lp->col -= (*mb_head_off)(p, p + lp->col);
 #ifdef FEAT_VIRTUALEDIT
 	/* Reset "coladd" when the cursor would be on the right half of a
 	 * double-wide character. */
@@ -4662,8 +4663,7 @@ iconv_string(
 	else if (ICONV_ERRNO != ICONV_E2BIG)
 	{
 	    /* conversion failed */
-	    vim_free(result);
-	    result = NULL;
+	    VIM_CLEAR(result);
 	    break;
 	}
 	/* Not enough room or skipping illegal sequence. */
@@ -4790,7 +4790,8 @@ iconv_end(void)
 # define USE_IMSTATUSFUNC (*p_imsf != NUL)
 #endif
 
-#if defined(FEAT_EVAL) && defined(FEAT_MBYTE)
+#if defined(FEAT_EVAL) && defined(FEAT_MBYTE) \
+	&& (defined(FEAT_XIM) || defined(IME_WITHOUT_XIM))
     static void
 call_imactivatefunc(int active)
 {
@@ -4809,11 +4810,7 @@ call_imstatusfunc(void)
     int is_active;
 
     /* FIXME: Don't execute user function in unsafe situation. */
-    if (exiting
-#   ifdef FEAT_AUTOCMD
-	    || is_autocmd_blocked()
-#   endif
-	    )
+    if (exiting || is_autocmd_blocked())
 	return FALSE;
     /* FIXME: :py print 'xxx' is shown duplicate result.
      * Use silent to avoid it. */
@@ -5696,11 +5693,11 @@ im_synthesize_keypress(unsigned int keyval, unsigned int state)
     void
 xim_reset(void)
 {
-#ifdef FEAT_EVAL
+# ifdef FEAT_EVAL
     if (USE_IMACTIVATEFUNC)
 	call_imactivatefunc(im_is_active);
     else
-#endif
+# endif
     if (xic != NULL)
     {
 	gtk_im_context_reset(xic);
@@ -6480,11 +6477,11 @@ xim_get_status_area_height(void)
 
 #else /* !defined(FEAT_XIM) */
 
-# if !defined(FEAT_GUI_W32) || !(defined(FEAT_MBYTE_IME) || defined(GLOBAL_IME))
+# ifdef IME_WITHOUT_XIM
 static int im_was_set_active = FALSE;
 
     int
-im_get_status()
+im_get_status(void)
 {
 #  if defined(FEAT_MBYTE) && defined(FEAT_EVAL)
     if (USE_IMSTATUSFUNC)

@@ -1017,7 +1017,7 @@ do_tag(
 		}
 	    }
 
-#ifdef FEAT_AUTOCMD
+#if defined(FEAT_EVAL)
 	    /* Let the SwapExists event know what tag we are jumping to. */
 	    vim_snprintf((char *)IObuff, IOSIZE, ":ta %s\r", name);
 	    set_vim_var_string(VV_SWAPCOMMAND, IObuff, -1);
@@ -1028,7 +1028,7 @@ do_tag(
 	     */
 	    i = jumpto_tag(matches[cur_match], forceit, type != DT_CSCOPE);
 
-#ifdef FEAT_AUTOCMD
+#if defined(FEAT_EVAL)
 	    set_vim_var_string(VV_SWAPCOMMAND, NULL, -1);
 #endif
 
@@ -1091,8 +1091,7 @@ end_do_tag:
     void
 tag_freematch(void)
 {
-    vim_free(tagmatchname);
-    tagmatchname = NULL;
+    VIM_CLEAR(tagmatchname);
 }
 
     static void
@@ -1130,7 +1129,7 @@ do_tags(exarg_T *eap UNUSED)
 		continue;
 
 	    msg_putchar('\n');
-	    sprintf((char *)IObuff, "%c%2d %2d %-15s %5ld  ",
+	    vim_snprintf((char *)IObuff, IOSIZE, "%c%2d %2d %-15s %5ld  ",
 		i == tagstackidx ? '>' : ' ',
 		i + 1,
 		tagstack[i].cur_match + 1,
@@ -2620,10 +2619,7 @@ free_tag_stuff(void)
 
 # if defined(FEAT_QUICKFIX)
     if (ptag_entry.tagname)
-    {
-	vim_free(ptag_entry.tagname);
-	ptag_entry.tagname = NULL;
-    }
+	VIM_CLEAR(ptag_entry.tagname);
 # endif
 }
 #endif
@@ -2958,12 +2954,9 @@ matching_line_len(char_u *lbuf)
     char_u	*p = lbuf + 1;
 
     /* does the same thing as parse_match() */
-    p += STRLEN(p) + 2;
+    p += STRLEN(p) + 1;
 #ifdef FEAT_EMACS_TAGS
-    if (*p)
-	p += STRLEN(p);
-    else
-	++p;
+    p += STRLEN(p) + 1;
 #endif
     return (p - lbuf) + STRLEN(p);
 }
@@ -3181,11 +3174,7 @@ jumpto_tag(
      * file.  Also accept a file name for which there is a matching BufReadCmd
      * autocommand event (e.g., http://sys/file).
      */
-    if (mch_getperm(fname) < 0
-#ifdef FEAT_AUTOCMD
-	    && !has_autocmd(EVENT_BUFREADCMD, fname, NULL)
-#endif
-       )
+    if (mch_getperm(fname) < 0 && !has_autocmd(EVENT_BUFREADCMD, fname, NULL))
     {
 	retval = NOTAGFILE;
 	vim_free(nofile_fname);

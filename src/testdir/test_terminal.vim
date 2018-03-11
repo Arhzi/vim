@@ -5,6 +5,7 @@ if !has('terminal')
 endif
 
 source shared.vim
+source screendump.vim
 
 let s:python = PythonProg()
 
@@ -28,13 +29,6 @@ func Run_shell_in_terminal(options)
   call assert_match("{'job': 'process \\d\\+ run'}", string)
 
   return buf
-endfunc
-
-" Stops the shell started by Run_shell_in_terminal().
-func Stop_shell_in_terminal(buf)
-  call term_sendkeys(a:buf, "exit\r")
-  call WaitFor('job_status(g:job) == "dead"')
-  call assert_equal('dead', job_status(g:job))
 endfunc
 
 func Test_terminal_basic()
@@ -522,7 +516,7 @@ func Test_terminal_noblock()
   " On MS-Windows there is an extra empty line below "done".  Find "done" in
   " the last-but-one or the last-but-two line.
   let lnum = term_getsize(buf)[0] - 1
-  call WaitFor({-> term_getline(buf, lnum) =~ "done" || term_getline(buf, lnum - 1) =~ "done"}, 3000)
+  call WaitFor({-> term_getline(buf, lnum) =~ "done" || term_getline(buf, lnum - 1) =~ "done"}, 10000)
   let line = term_getline(buf, lnum)
   if line !~ 'done'
     let line = term_getline(buf, lnum - 1)
@@ -712,6 +706,15 @@ func Test_terminal_wall()
   unlet g:job
 endfunc
 
+func Test_terminal_wqall()
+  let buf = Run_shell_in_terminal({})
+  call assert_fails('wqall', 'E948')
+  call Stop_shell_in_terminal(buf)
+  call term_wait(buf)
+  exe buf . 'bwipe'
+  unlet g:job
+endfunc
+
 func Test_terminal_composing_unicode()
   let save_enc = &encoding
   set encoding=utf-8
@@ -795,3 +798,147 @@ func Test_terminal_aucmd_on_close()
   au! repro
   delfunc Nop
 endfunc
+
+func Test_terminal_term_start_empty_command()
+  let cmd = "call term_start('', {'curwin' : 1, 'term_finish' : 'close'})"
+  call assert_fails(cmd, 'E474')
+  let cmd = "call term_start('', {'curwin' : 1, 'term_finish' : 'close'})"
+  call assert_fails(cmd, 'E474')
+  let cmd = "call term_start({}, {'curwin' : 1, 'term_finish' : 'close'})"
+  call assert_fails(cmd, 'E474')
+  let cmd = "call term_start(0, {'curwin' : 1, 'term_finish' : 'close'})"
+  call assert_fails(cmd, 'E474')
+endfunc
+
+func Test_terminal_response_to_control_sequence()
+  if !has('unix')
+    return
+  endif
+
+  let buf = Run_shell_in_terminal({})
+  call term_wait(buf)
+
+  new
+  call setline(1, "\x1b[6n")
+  write! Xescape
+  bwipe
+  call term_sendkeys(buf, "cat Xescape\<cr>")
+
+  " wait for the response of control sequence from libvterm (and send it to tty)
+  sleep 200m
+  call term_wait(buf)
+
+  " Wait for output from tty to display, below an empty line.
+  " It should show \e3;1R, but only 1R may show up
+  call assert_match('\<\d\+R', term_getline(buf, 3))
+
+  call term_sendkeys(buf, "\<c-c>")
+  call term_wait(buf)
+  call Stop_shell_in_terminal(buf)
+
+  exe buf . 'bwipe'
+  call delete('Xescape')
+  unlet g:job
+endfunc
+
+" Run Vim in a terminal, then start a terminal in that Vim with a kill
+" argument, check that :qall works.
+func Test_terminal_qall_kill_arg()
+  if !CanRunVimInTerminal()
+    return
+  endif
+  let buf = RunVimInTerminal('', {})
+
+  " Open a terminal window and wait for the prompt to appear
+  call term_sendkeys(buf, ":term ++kill=kill\<CR>")
+  call WaitFor({-> term_getline(buf, 10) =~ '\[running]'})
+  call WaitFor({-> term_getline(buf, 1) !~ '^\s*$'})
+
+  " make Vim exit, it will kill the shell
+  call term_sendkeys(buf, "\<C-W>:qall\<CR>")
+  call WaitFor({-> term_getstatus(buf) == "finished"})
+
+  " close the terminal window where Vim was running
+  quit
+endfunc
+
+" Run Vim in a terminal, then start a terminal in that Vim with a kill
+" argument, check that :qall works.
+func Test_terminal_qall_kill_func()
+  if !CanRunVimInTerminal()
+    return
+  endif
+  let buf = RunVimInTerminal('', {})
+
+  " Open a terminal window and wait for the prompt to appear
+  call term_sendkeys(buf, ":term\<CR>")
+  call WaitFor({-> term_getline(buf, 10) =~ '\[running]'})
+  call WaitFor({-> term_getline(buf, 1) !~ '^\s*$'})
+
+  " set kill using term_setkill()
+  call term_sendkeys(buf, "\<C-W>:call term_setkill(bufnr('%'), 'kill')\<CR>")
+
+  " make Vim exit, it will kill the shell
+  call term_sendkeys(buf, "\<C-W>:qall\<CR>")
+  call WaitFor({-> term_getstatus(buf) == "finished"})
+
+  " close the terminal window where Vim was running
+  quit
+endfunc
+
+" Run Vim in a terminal, then start a terminal in that Vim without a kill
+" argument, check that :confirm qall works.
+func Test_terminal_qall_prompt()
+  if !CanRunVimInTerminal()
+    return
+  endif
+  let buf = RunVimInTerminal('', {})
+
+  " Open a terminal window and wait for the prompt to appear
+  call term_sendkeys(buf, ":term\<CR>")
+  call WaitFor({-> term_getline(buf, 10) =~ '\[running]'})
+  call WaitFor({-> term_getline(buf, 1) !~ '^\s*$'})
+
+  " make Vim exit, it will prompt to kill the shell
+  call term_sendkeys(buf, "\<C-W>:confirm qall\<CR>")
+  call WaitFor({-> term_getline(buf, 20) =~ 'ancel:'})
+  call term_sendkeys(buf, "y")
+  call WaitFor({-> term_getstatus(buf) == "finished"})
+
+  " close the terminal window where Vim was running
+  quit
+endfunc
+
+func Test_terminalopen_autocmd()
+  augroup repro
+    au!
+    au TerminalOpen * let s:called += 1
+  augroup END
+
+  let s:called = 0
+
+  " Open a terminal window with :terminal
+  terminal
+  call assert_equal(1, s:called)
+  bwipe!
+
+  " Open a terminal window with term_start()
+  call term_start(&shell)
+  call assert_equal(2, s:called)
+  bwipe!
+
+  " Open a hidden terminal buffer with :terminal
+  terminal ++hidden
+  call assert_equal(3, s:called)
+  for buf in term_list()
+    exe buf . "bwipe!"
+  endfor
+
+  " Open a hidden terminal buffer with term_start()
+  let buf = term_start(&shell, {'hidden': 1})
+  call assert_equal(4, s:called)
+  exe buf . "bwipe!"
+
+  unlet s:called
+  au! repro
+endfunction

@@ -348,24 +348,29 @@ inc_cursor(void)
     int
 inc(pos_T *lp)
 {
-    char_u  *p = ml_get_pos(lp);
+    char_u  *p;
 
-    if (*p != NUL)	/* still within line, move to next char (may be NUL) */
+    /* when searching position may be set to end of a line */
+    if (lp->col != MAXCOL)
     {
-#ifdef FEAT_MBYTE
-	if (has_mbyte)
+	p = ml_get_pos(lp);
+	if (*p != NUL)	/* still within line, move to next char (may be NUL) */
 	{
-	    int l = (*mb_ptr2len)(p);
+#ifdef FEAT_MBYTE
+	    if (has_mbyte)
+	    {
+		int l = (*mb_ptr2len)(p);
 
-	    lp->col += l;
-	    return ((p[l] != NUL) ? 0 : 2);
-	}
+		lp->col += l;
+		return ((p[l] != NUL) ? 0 : 2);
+	    }
 #endif
-	lp->col++;
+	    lp->col++;
 #ifdef FEAT_VIRTUALEDIT
-	lp->coladd = 0;
+	    lp->coladd = 0;
 #endif
-	return ((p[1] != NUL) ? 0 : 2);
+	    return ((p[1] != NUL) ? 0 : 2);
+	}
     }
     if (lp->lnum != curbuf->b_ml.ml_line_count)     /* there is a next line */
     {
@@ -412,8 +417,21 @@ dec(pos_T *lp)
 #ifdef FEAT_VIRTUALEDIT
     lp->coladd = 0;
 #endif
-    if (lp->col > 0)		/* still within line */
+    if (lp->col == MAXCOL)
     {
+	/* past end of line */
+	p = ml_get(lp->lnum);
+	lp->col = (colnr_T)STRLEN(p);
+#ifdef FEAT_MBYTE
+	if (has_mbyte)
+	    lp->col -= (*mb_head_off)(p, p + lp->col);
+#endif
+	return 0;
+    }
+
+    if (lp->col > 0)
+    {
+	/* still within line */
 	lp->col--;
 #ifdef FEAT_MBYTE
 	if (has_mbyte)
@@ -424,8 +442,10 @@ dec(pos_T *lp)
 #endif
 	return 0;
     }
-    if (lp->lnum > 1)		/* there is a prior line */
+
+    if (lp->lnum > 1)
     {
+	/* there is a prior line */
 	lp->lnum--;
 	p = ml_get(lp->lnum);
 	lp->col = (colnr_T)STRLEN(p);
@@ -435,7 +455,9 @@ dec(pos_T *lp)
 #endif
 	return 1;
     }
-    return -1;			/* at start of file */
+
+    /* at start of file */
+    return -1;
 }
 
 /*
@@ -1077,10 +1099,8 @@ free_all_mem(void)
 	return;
     entered_free_all_mem = TRUE;
 
-# ifdef FEAT_AUTOCMD
     /* Don't want to trigger autocommands from here on. */
     block_autocmds();
-# endif
 
     /* Close all tabs and windows.  Reset 'equalalways' to avoid redraws. */
     p_ea = FALSE;
@@ -1092,6 +1112,10 @@ free_all_mem(void)
 # if defined(FEAT_SPELL)
     /* Free all spell info. */
     spell_free_all();
+# endif
+
+#if defined(FEAT_INS_EXPAND) && defined(FEAT_BEVAL_TERM)
+    ui_remove_balloon();
 # endif
 
 # if defined(FEAT_USR_CMDS)
@@ -1131,9 +1155,7 @@ free_all_mem(void)
 # endif
 
     /* Obviously named calls. */
-# if defined(FEAT_AUTOCMD)
     free_all_autocmds();
-# endif
     clear_termcodes();
     free_all_marks();
     alist_clear(&global_alist);
@@ -1600,11 +1622,17 @@ strup_save(char_u *orig)
 		char_u	*s;
 
 		c = utf_ptr2char(p);
+		l = utf_ptr2len(p);
+		if (c == 0)
+		{
+		    /* overlong sequence, use only the first byte */
+		    c = *p;
+		    l = 1;
+		}
 		uc = utf_toupper(c);
 
 		/* Reallocate string when byte count changes.  This is rare,
 		 * thus it's OK to do another malloc()/free(). */
-		l = utf_ptr2len(p);
 		newl = utf_char2len(uc);
 		if (newl != l)
 		{
@@ -1663,11 +1691,17 @@ strlow_save(char_u *orig)
 		char_u	*s;
 
 		c = utf_ptr2char(p);
+		l = utf_ptr2len(p);
+		if (c == 0)
+		{
+		    /* overlong sequence, use only the first byte */
+		    c = *p;
+		    l = 1;
+		}
 		lc = utf_tolower(c);
 
 		/* Reallocate string when byte count changes.  This is rare,
 		 * thus it's OK to do another malloc()/free(). */
-		l = utf_ptr2len(p);
 		newl = utf_char2len(lc);
 		if (newl != l)
 		{
@@ -1789,6 +1823,8 @@ copy_option_part(
  * Replacement for free() that ignores NULL pointers.
  * Also skip free() when exiting for sure, this helps when we caught a deadly
  * signal that was caused by a crash in free().
+ * If you want to set NULL after calling this function, you should use
+ * VIM_CLEAR() instead.
  */
     void
 vim_free(void *x)
@@ -3355,13 +3391,18 @@ same_directory(char_u *f1, char_u *f2)
  * Return OK or FAIL.
  */
     int
-vim_chdirfile(char_u *fname)
+vim_chdirfile(char_u *fname, char *trigger_autocmd UNUSED)
 {
     char_u	dir[MAXPATHL];
+    int		res;
 
     vim_strncpy(dir, fname, MAXPATHL - 1);
     *gettail_sep(dir) = NUL;
-    return mch_chdir((char *)dir) == 0 ? OK : FAIL;
+    res = mch_chdir((char *)dir) == 0 ? OK : FAIL;
+    if (res == OK && trigger_autocmd != NULL)
+	apply_autocmds(EVENT_DIRCHANGED, (char_u *)trigger_autocmd,
+							   dir, FALSE, curbuf);
+    return res;
 }
 #endif
 
@@ -5132,8 +5173,8 @@ ff_wc_equal(char_u *s1, char_u *s2)
 	prev2 = prev1;
 	prev1 = c1;
 
-        i += MB_PTR2LEN(s1 + i);
-        j += MB_PTR2LEN(s2 + j);
+	i += MB_PTR2LEN(s1 + i);
+	j += MB_PTR2LEN(s2 + j);
     }
     return s1[i] == s2[j];
 }
@@ -5851,7 +5892,7 @@ pathcmp(const char *p, const char *q, int maxlen)
 	    if (c2 == NUL)  /* full match */
 		return 0;
 	    s = q;
-            i = j;
+	    i = j;
 	    break;
 	}
 

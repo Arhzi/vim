@@ -1233,8 +1233,7 @@ PrintDlgProc(
 	    if (prt_name != NULL)
 	    {
 		vimSetDlgItemText(hDlg, IDC_PRINTTEXT2, (char_u *)prt_name);
-		vim_free(prt_name);
-		prt_name = NULL;
+		VIM_CLEAR(prt_name);
 	    }
 	    EnableMenuItem(GetSystemMenu(hDlg, FALSE), SC_CLOSE, MF_GRAYED);
 #ifndef FEAT_GUI
@@ -2164,7 +2163,6 @@ Messaging_WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 			   (data->dwData == COPYDATA_RESULT ? 1 :
 							      2))) == FAIL)
 		    vim_free(str);
-#ifdef FEAT_AUTOCMD
 		else if (data->dwData == COPYDATA_REPLY)
 		{
 		    char_u	winstr[30];
@@ -2173,7 +2171,6 @@ Messaging_WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 		    apply_autocmds(EVENT_REMOTEREPLY, winstr, str,
 								TRUE, curbuf);
 		}
-#endif
 	    }
 	    return 1;
 	}
@@ -2608,6 +2605,7 @@ serverGetReply(HWND server, int *expr_res, int remove, int wait, int timeout)
 	while (reply_received == 0)
 	{
 #ifdef FEAT_TIMERS
+	    /* TODO: use the return value to decide how long to wait. */
 	    check_due_timer();
 #endif
 	    time(&now);

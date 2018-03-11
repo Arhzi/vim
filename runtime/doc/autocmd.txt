@@ -1,4 +1,4 @@
-*autocmd.txt*   For Vim version 8.0.  Last change: 2017 Nov 05
+*autocmd.txt*   For Vim version 8.0.  Last change: 2018 Mar 05
 
 
 		  VIM REFERENCE MANUAL    by Bram Moolenaar
@@ -21,7 +21,6 @@ For a basic explanation, see section |40.3| in the user manual.
 11. Disabling autocommands	|autocmd-disable|
 
 {Vi does not have any of these commands}
-{only when the |+autocmd| feature has not been disabled at compile time}
 
 ==============================================================================
 1. Introduction						*autocmd-intro*
@@ -33,7 +32,7 @@ files matching *.c.  You can also use autocommands to implement advanced
 features, such as editing compressed files (see |gzip-example|).  The usual
 place to put autocommands is in your .vimrc or .exrc file.
 
-					*E203* *E204* *E143* *E855* *E937*
+				*E203* *E204* *E143* *E855* *E937* *E952*
 WARNING: Using autocommands is very powerful, and may lead to unexpected side
 effects.  Be careful not to destroy your text.
 - It's a good idea to do some testing on an expendable copy of a file first.
@@ -258,6 +257,7 @@ Name			triggered by ~
 |BufCreate|		just after adding a buffer to the buffer list
 |BufDelete|		before deleting a buffer from the buffer list
 |BufWipeout|		before completely deleting a buffer
+|TerminalOpen|		after a terminal buffer was created
 
 |BufFilePre|		before changing the name of the current buffer
 |BufFilePost|		after changing the name of the current buffer
@@ -286,7 +286,8 @@ Name			triggered by ~
 |GUIFailed|		after starting the GUI failed
 |TermResponse|		after the terminal response to |t_RV| is received
 
-|QuitPre|		when using `:quit`, before deciding whether to quit
+|QuitPre|		when using `:quit`, before deciding whether to exit
+|ExitPre|		when using a command that may make Vim exit
 |VimLeavePre|		before exiting Vim, before writing the viminfo file
 |VimLeave|		before exiting Vim, after writing the viminfo file
 
@@ -294,6 +295,8 @@ Name			triggered by ~
 |FileChangedShell|	Vim notices that a file changed since editing started
 |FileChangedShellPost|	After handling a file changed since editing started
 |FileChangedRO|		before making the first change to a read-only file
+
+|DirChanged|		after the working directory has changed
 
 |ShellCmdPost|		after executing a shell command
 |ShellFilterPost|	after filtering with a shell command
@@ -322,6 +325,14 @@ Name			triggered by ~
 |CmdwinEnter|		after entering the command-line window
 |CmdwinLeave|		before leaving the command-line window
 
+|CmdlineChanged|	after a change was made to the command-line text
+|CmdlineEnter|		after the cursor moves to the command line
+|CmdlineLeave|		before the cursor leaves the command line
+
+|CmdlineChanged|	after a change was made to the command-line text
+|CmdlineEnter|		after the cursor moves to the command line
+|CmdlineLeave|		before the cursor leaves the command line
+
 |InsertEnter|		starting Insert mode
 |InsertChange|		when typing <Insert> while in Insert or Replace mode
 |InsertLeave|		when leaving Insert mode
@@ -330,6 +341,10 @@ Name			triggered by ~
 
 |TextChanged|		after a change was made to the text in Normal mode
 |TextChangedI|		after a change was made to the text in Insert mode
+			when popup menu is not visible
+|TextChangedP|		after a change was made to the text in Insert mode
+			when popup menu visible
+|TextYankPost|		after text is yanked or deleted
 
 |ColorScheme|		after loading a color scheme
 
@@ -499,6 +514,13 @@ CmdUndefined			When a user command is used but it isn't
 				command is defined.  An alternative is to
 				always define the user command and have it
 				invoke an autoloaded function.  See |autoload|.
+							*CmdlineChanged*
+CmdlineChanged			After a change was made to the text in the
+				command line.  Be careful not to mess up
+				the command line, it may cause Vim to lock up.
+				<afile> is set to a single character,
+				indicating the type of command-line.
+				|cmdwin-char|
 							*CmdlineEnter*
 CmdlineEnter			After moving the cursor to the command line,
 				where the user can type a command or search
@@ -625,6 +647,21 @@ FileChangedRO			Before making the first change to a read-only
 							*E881*
 				If the number of lines changes saving for undo
 				may fail and the change will be aborted.
+							*DirChanged*
+DirChanged			The working directory has changed in response
+				to the |:cd| or |:lcd| commands, or as a
+				result of the 'autochdir' option.
+				The pattern can be:
+					"window" to trigger on `:lcd
+					"global" to trigger on `:cd`
+					"auto"   to trigger on 'autochdir'.
+					"drop"	 to trigger on editing a file
+				<afile> is set to the new directory name.
+							*ExitPre*
+ExitPre				When using `:quit`, `:wq` in a way it makes
+				Vim exit, or using `:qall`, just after
+				|QuitPre|.  Can be used to close any
+				non-essential window.
 							*FileChangedShell*
 FileChangedShell		When Vim notices that the modification time of
 				a file has changed since editing started.
@@ -762,7 +799,7 @@ InsertCharPre			When a character is typed in Insert mode,
 				inserted literally.
 				It is not allowed to change the text |textlock|.
 				The event is not triggered when 'paste' is
-				set.
+				set. {only with the +eval feature}
 							*InsertEnter*
 InsertEnter			Just before starting Insert mode.  Also for
 				Replace mode and Virtual Replace mode.  The
@@ -840,6 +877,7 @@ QuitPre				When using `:quit`, `:wq` or `:qall`, before
 				or quits Vim.  Can be used to close any
 				non-essential window if the current window is
 				the last ordinary window.
+				Also see |ExitPre|.
 							*RemoteReply*
 RemoteReply			When a reply from a Vim that functions as
 				server was received |server2client()|.  The
@@ -908,6 +946,7 @@ SwapExists			Detected an existing swap file when starting
 				It is not allowed to change to another buffer,
 				change a buffer name or change directory
 				here.
+				{only available with the +eval feature}
 							*Syntax*
 Syntax				When the 'syntax' option has been set.  The
 				pattern is matched against the syntax name.
@@ -934,6 +973,11 @@ TermChanged			After the value of 'term' has changed.  Useful
 				for re-loading the syntax file to update the
 				colors, fonts and other terminal-dependent
 				settings.  Executed for all loaded buffers.
+							*TerminalOpen*
+TerminalOpen			Just after a terminal buffer was created, with
+				`:terminal` or |term_start()|. This event is
+				triggered even if the buffer is created
+				without a window, with the ++hidden option.
 							*TermResponse*
 TermResponse			After the response to |t_RV| is received from
 				the terminal.  The value of |v:termresponse|
@@ -956,6 +1000,31 @@ TextChangedI			After a change was made to the text in the
 				current buffer in Insert mode.
 				Not triggered when the popup menu is visible.
 				Otherwise the same as TextChanged.
+							*TextChangedP*
+TextChangedP			After a change was made to the text in the
+				current buffer in Insert mode, only when the
+				popup menu is visible.  Otherwise the same as
+				TextChanged.
+							*TextYankPost*
+TextYankPost			After text has been yanked or deleted in the
+				current buffer.  The following values of
+				|v:event| can be used to determine the operation
+				that triggered this autocmd:
+				   operator    	The operation performed.
+				   regcontents 	Text that was stored in the
+						register, as a list of lines,
+						like with: >
+						getreg(r, 1, 1)
+<				   regname	Name of the |register| or
+						empty string for the unnamed
+						register.
+				   regtype	Type of the register, see
+						|getregtype()|.
+				Not triggered when |quote_| is used nor when
+				called recursively.
+				It is not allowed to change the buffer text,
+				see |textlock|.
+				{only when compiled with the +eval feature}
 							*User*
 User				Never executed automatically.  To be used for
 				autocommands that are only executed with

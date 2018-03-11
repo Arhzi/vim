@@ -1372,7 +1372,6 @@ call_func(
 	    else
 		fp = find_func(rfname);
 
-#ifdef FEAT_AUTOCMD
 	    /* Trigger FuncUndefined event, may load the function. */
 	    if (fp == NULL
 		    && apply_autocmds(EVENT_FUNCUNDEFINED,
@@ -1382,7 +1381,6 @@ call_func(
 		/* executed an autocommand, search for the function again */
 		fp = find_func(rfname);
 	    }
-#endif
 	    /* Try loading a package. */
 	    if (fp == NULL && script_autoload(rfname, TRUE) && !aborting())
 	    {
@@ -2122,10 +2120,7 @@ ex_function(exarg_T *eap)
 	    /* between ":append" and "." and between ":python <<EOF" and "EOF"
 	     * don't check for ":endfunc". */
 	    if (STRCMP(theline, skip_until) == 0)
-	    {
-		vim_free(skip_until);
-		skip_until = NULL;
-	    }
+		VIM_CLEAR(skip_until);
 	}
 	else
 	{
@@ -2295,8 +2290,7 @@ ex_function(exarg_T *eap)
 		/* redefine existing function */
 		ga_clear_strings(&(fp->uf_args));
 		ga_clear_strings(&(fp->uf_lines));
-		vim_free(name);
-		name = NULL;
+		VIM_CLEAR(name);
 	    }
 	}
     }
@@ -2972,6 +2966,9 @@ ex_return(exarg_T *eap)
     /* It's safer to return also on error. */
     else if (!eap->skip)
     {
+	/* In return statement, cause_abort should be force_abort. */
+	update_force_abort();
+
 	/*
 	 * Return unless the expression evaluation has been cancelled due to an
 	 * aborting error, an interrupt, or an exception.
@@ -3086,6 +3083,8 @@ ex_call(exarg_T *eap)
 	    failed = TRUE;
 	    break;
 	}
+	if (has_watchexpr())
+	    dbg_check_breakpoint(eap);
 
 	/* Handle a function returning a Funcref, Dictionary or List. */
 	if (handle_subscript(&arg, &rettv, !eap->skip, TRUE) == FAIL)

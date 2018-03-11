@@ -1,8 +1,8 @@
 " Vim syntax file
 " Language:	Vim 8.0 script
 " Maintainer:	Charles E. Campbell <NdrOchipS@PcampbellAfamily.Mbiz>
-" Last Change:	November 03, 2017
-" Version:	8.0-04
+" Last Change:	Dec 15, 2017
+" Version:	8.0-07
 " URL:	http://www.drchip.org/astronaut/vim/index.html#SYNTAX_VIM
 " Automatically generated keyword lists: {{{1
 
@@ -66,7 +66,7 @@ syn keyword vimErrSetting contained	bioskey biosk conskey consk autoprint beauti
 
 " AutoCmd Events {{{2
 syn case ignore
-syn keyword vimAutoEvent contained	BufAdd BufCreate BufDelete BufEnter BufFilePost BufFilePre BufHidden BufLeave BufNew BufNewFile BufRead BufReadCmd BufReadPost BufReadPre BufUnload BufWinEnter BufWinLeave BufWipeout BufWrite BufWriteCmd BufWritePost BufWritePre CmdlineEnter CmdlineLeave CmdUndefined CmdwinEnter CmdwinLeave ColorScheme CompleteDone CursorHold CursorHoldI CursorMoved CursorMovedI EncodingChanged FileAppendCmd FileAppendPost FileAppendPre FileChangedRO FileChangedShell FileChangedShellPost FileEncoding FileReadCmd FileReadPost FileReadPre FileType FileWriteCmd FileWritePost FileWritePre FilterReadPost FilterReadPre FilterWritePost FilterWritePre FocusGained FocusLost FuncUndefined GUIEnter GUIFailed InsertChange InsertCharPre InsertEnter InsertLeave MenuPopup OptionSet QuickFixCmdPost QuickFixCmdPre QuitPre RemoteReply SessionLoadPost ShellCmdPost ShellFilterPost SourceCmd SourcePre SpellFileMissing StdinReadPost StdinReadPre SwapExists Syntax TabClosed TabEnter TabLeave TabNew TermChanged TermResponse TextChanged TextChangedI User VimEnter VimLeave VimLeavePre VimResized WinEnter WinLeave WinNew 
+syn keyword vimAutoEvent contained	BufAdd BufCreate BufDelete BufEnter BufFilePost BufFilePre BufHidden BufLeave BufNew BufNewFile BufRead BufReadCmd BufReadPost BufReadPre BufUnload BufWinEnter BufWinLeave BufWipeout BufWrite BufWriteCmd BufWritePost BufWritePre CmdlineEnter CmdlineLeave CmdUndefined CmdwinEnter CmdwinLeave ColorScheme CompleteDone CursorHold CursorHoldI CursorMoved CursorMovedI EncodingChanged FileAppendCmd FileAppendPost FileAppendPre FileChangedRO FileChangedShell FileChangedShellPost FileEncoding FileReadCmd FileReadPost FileReadPre FileType FileWriteCmd FileWritePost FileWritePre FilterReadPost FilterReadPre FilterWritePost FilterWritePre FocusGained FocusLost FuncUndefined GUIEnter GUIFailed InsertChange InsertCharPre InsertEnter InsertLeave MenuPopup OptionSet QuickFixCmdPost QuickFixCmdPre QuitPre RemoteReply SessionLoadPost ShellCmdPost ShellFilterPost SourceCmd SourcePre SpellFileMissing StdinReadPost StdinReadPre SwapExists Syntax TabClosed TabEnter TabLeave TabNew TermChanged TermResponse TextChanged TextChangedI TextChangedP User VimEnter VimLeave VimLeavePre VimResized WinEnter WinLeave WinNew 
 
 " Highlight commonly used Groupnames {{{2
 syn keyword vimGroup contained	Comment Constant String Character Number Boolean Float Identifier Function Statement Conditional Repeat Label Operator Keyword Exception PreProc Include Define Macro PreCondit Type StorageClass Structure Typedef Special SpecialChar Tag Delimiter SpecialComment Debug Underlined Ignore Error Todo 
@@ -199,7 +199,7 @@ syn keyword vimFTOption contained	detect indent off on plugin
 
 " Augroup : vimAugroupError removed because long augroups caused sync'ing problems. {{{2
 " ======= : Trade-off: Increasing synclines with slower editing vs augroup END error checking.
-syn cluster vimAugroupList	contains=vimAugroup,vimIsCommand,vimCommand,vimUserCmd,vimExecute,vimNotFunc,vimFuncName,vimFunction,vimFunctionError,vimLineComment,vimMap,vimSpecFile,vimOper,vimNumber,vimOperParen,vimComment,vimString,vimSubst,vimMark,vimRegister,vimAddress,vimFilter,vimCmplxRepeat,vimComment,vimLet,vimSet,vimAutoCmd,vimRegion,vimSynLine,vimNotation,vimCtrlChar,vimFuncVar,vimContinue
+syn cluster vimAugroupList	contains=vimAugroup,vimIsCommand,vimCommand,vimUserCmd,vimExecute,vimNotFunc,vimFuncName,vimFunction,vimFunctionError,vimLineComment,vimMap,vimSpecFile,vimOper,vimNumber,vimOperParen,vimComment,vimString,vimSubst,vimMark,vimRegister,vimAddress,vimFilter,vimCmplxRepeat,vimComment,vimLet,vimSet,vimAutoCmd,vimRegion,vimSynLine,vimNotation,vimCtrlChar,vimFuncVar,vimContinue,vimSetEqual,vimOption
 if exists("g:vimsyn_folding") && g:vimsyn_folding =~# 'a'
  syn region  vimAugroup	fold matchgroup=vimAugroupKey start="\<aug\%[roup]\>\ze\s\+\K\k*" end="\<aug\%[roup]\>\ze\s\+[eE][nN][dD]\>"	contains=vimAutoCmd,@vimAugroupList
 else
@@ -215,7 +215,8 @@ syn keyword vimAugroupKey contained	aug[roup]
 " =========
 syn cluster	vimOperGroup	contains=vimEnvvar,vimFunc,vimFuncVar,vimOper,vimOperParen,vimNumber,vimString,vimRegister,vimContinue
 syn match	vimOper	"\(==\|!=\|>=\|<=\|=\~\|!\~\|>\|<\|=\)[?#]\{0,2}"	skipwhite nextgroup=vimString,vimSpecFile
-syn match	vimOper	"||\|&&\|[-+.]"	skipwhite nextgroup=vimString,vimSpecFile
+syn match	vimOper	"\(\<is\>\|\<isnot\>\)[?#]\{0,2}"		skipwhite nextgroup=vimString,vimSpecFile
+syn match	vimOper	"||\|&&\|[-+.]"			skipwhite nextgroup=vimString,vimSpecFile
 syn region	vimOperParen 	matchgroup=vimParenSep	start="(" end=")" contains=@vimOperGroup
 syn region	vimOperParen	matchgroup=vimSep		start="{" end="}" contains=@vimOperGroup nextgroup=vimVar,vimFuncVar
 if !exists("g:vimsyn_noerror") && !exists("g:vimsyn_noopererror")
@@ -559,7 +560,7 @@ syn match	vimHiBang	contained	"!"	skipwhite nextgroup=@vimHighlightCluster
 
 syn match	vimHiGroup	contained	"\i\+"
 syn case ignore
-syn keyword	vimHiAttrib	contained	none bold inverse italic reverse standout underline undercurl
+syn keyword	vimHiAttrib	contained	none bold inverse italic nocombine reverse standout strikethrough underline undercurl
 syn keyword	vimFgBgAttrib	contained	none bg background fg foreground
 syn case match
 syn match	vimHiAttribList	contained	"\i\+"	contains=vimHiAttrib

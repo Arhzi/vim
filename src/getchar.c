@@ -516,7 +516,6 @@ CancelRedo(void)
     }
 }
 
-#if defined(FEAT_AUTOCMD) || defined(FEAT_EVAL) || defined(PROTO)
 /*
  * Save redobuff and old_redobuff to save_redobuff and save_old_redobuff.
  * Used before executing autocommands and user functions.
@@ -552,7 +551,6 @@ restoreRedobuff(save_redo_T *save_redo)
     free_buff(&old_redobuff);
     old_redobuff = save_redo->sr_old_redobuff;
 }
-#endif
 
 /*
  * Append "s" to the redo buffer.
@@ -1854,7 +1852,7 @@ vpeekc(void)
     return vgetorpeek(FALSE);
 }
 
-#if defined(FEAT_TERMRESPONSE) || defined(PROTO)
+#if defined(FEAT_TERMRESPONSE) || defined(FEAT_TERMINAL) || defined(PROTO)
 /*
  * Like vpeekc(), but don't allow mapping.  Do allow checking for terminal
  * codes.
@@ -2115,7 +2113,8 @@ vgetorpeek(int advance)
 			    && State != ASKMORE
 			    && State != CONFIRM
 #ifdef FEAT_INS_EXPAND
-			    && !((ctrl_x_mode != 0 && vim_is_ctrl_x_key(c1))
+			    && !((ctrl_x_mode_not_default()
+						      && vim_is_ctrl_x_key(c1))
 				    || ((compl_cont_status & CONT_LOCAL)
 					&& (c1 == Ctrl_N || c1 == Ctrl_P)))
 #endif
@@ -2890,7 +2889,7 @@ vgetorpeek(int advance)
 						     + typebuf.tb_len] != NUL)
 			typebuf.tb_noremap[typebuf.tb_off
 						 + typebuf.tb_len++] = RM_YES;
-#ifdef FEAT_MBYTE
+#ifdef HAVE_INPUT_METHOD
 		    /* Get IM status right after getting keys, not after the
 		     * timeout for a mapping (focus may be lost by then). */
 		    vgetc_im_active = im_get_status();
@@ -2972,16 +2971,10 @@ inchar(
     if (wait_time == -1L || wait_time > 100L)  /* flush output before waiting */
     {
 	cursor_on();
-	out_flush();
-#ifdef FEAT_GUI
-	if (gui.in_use)
-	{
-	    gui_update_cursor(FALSE, FALSE);
-# ifdef FEAT_MOUSESHAPE
-	    if (postponed_mouseshape)
-		update_mouseshape(-1);
-# endif
-	}
+	out_flush_cursor(FALSE, FALSE);
+#if defined(FEAT_GUI) && defined(FEAT_MOUSESHAPE)
+	if (gui.in_use && postponed_mouseshape)
+	    update_mouseshape(-1);
 #endif
     }
 
@@ -3127,10 +3120,8 @@ fix_input_buffer(char_u *buf, int len)
 	else
 #endif
 	if (p[0] == NUL || (p[0] == K_SPECIAL
-#ifdef FEAT_AUTOCMD
 		    /* timeout may generate K_CURSORHOLD */
 		    && (i < 2 || p[1] != KS_EXTRA || p[2] != (int)KE_CURSORHOLD)
-#endif
 #if defined(WIN3264) && !defined(FEAT_GUI)
 		    /* Win32 console passes modifiers */
 		    && (i < 2 || p[1] != KS_MODIFIER)

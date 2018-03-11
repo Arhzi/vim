@@ -294,19 +294,7 @@
 # define DO_AUTOCHDIR
 #endif
 
-#if defined(FEAT_SCROLLBIND) && defined(FEAT_CURSORBIND)
-# define RESET_BINDING(wp)  (wp)->w_p_scb = FALSE; (wp)->w_p_crb = FALSE
-#else
-# if defined(FEAT_SCROLLBIND)
-#  define RESET_BINDING(wp)  (wp)->w_p_scb = FALSE
-# else
-#  if defined(FEAT_CURSORBIND)
-#   define RESET_BINDING(wp)  (wp)->w_p_crb = FALSE
-#  else
-#   define RESET_BINDING(wp)
-#  endif
-# endif
-#endif
+#define RESET_BINDING(wp)  (wp)->w_p_scb = FALSE; (wp)->w_p_crb = FALSE
 
 #ifdef FEAT_DIFF
 # define PLINES_NOFILL(x) plines_nofill(x)
@@ -365,6 +353,28 @@
  * HIKEY2DI() converts a hashitem key pointer to a dictitem pointer.
  * HI2DI() converts a hashitem pointer to a dictitem pointer.
  */
-# define DI2HIKEY(di) ((di)->di_key)
-# define HIKEY2DI(p)  ((dictitem_T *)(p - offsetof(dictitem_T, di_key)))
-# define HI2DI(hi)     HIKEY2DI((hi)->hi_key)
+#define DI2HIKEY(di) ((di)->di_key)
+#define HIKEY2DI(p)  ((dictitem_T *)(p - offsetof(dictitem_T, di_key)))
+#define HI2DI(hi)     HIKEY2DI((hi)->hi_key)
+
+/*
+ * Flush control functions.
+ */
+#ifdef FEAT_GUI
+# define mch_enable_flush()	gui_enable_flush()
+# define mch_disable_flush()	gui_disable_flush()
+#else
+# define mch_enable_flush()
+# define mch_disable_flush()
+#endif
+
+/*
+ * Like vim_free(), and also set the pointer to NULL.
+ */
+#define VIM_CLEAR(p) \
+    do { \
+	if ((p) != NULL) { \
+	    vim_free(p); \
+	    (p) = NULL; \
+	} \
+    } while (0)

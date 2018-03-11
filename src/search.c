@@ -97,10 +97,8 @@ static char_u	lastc_bytes[MB_MAXBYTES + 1];
 static int	lastc_bytelen = 1;	/* >1 for multi-byte char */
 #endif
 
-#if defined(FEAT_AUTOCMD) || defined(FEAT_EVAL) || defined(PROTO)
 /* copy of spats[], for keeping the search patterns while executing autocmds */
 static struct spat  saved_spats[2];
-#endif
 # ifdef FEAT_SEARCH_EXTRA
 /* copy of spats[RE_SEARCH], for keeping the search patterns while incremental
  * searching */
@@ -300,7 +298,6 @@ save_re_pat(int idx, char_u *pat, int magic)
     }
 }
 
-#if defined(FEAT_AUTOCMD) || defined(FEAT_EVAL) || defined(PROTO)
 /*
  * Save the search patterns, so they can be restored later.
  * Used before/after executing autocommands and user functions.
@@ -318,10 +315,10 @@ save_search_patterns(void)
 	saved_spats[1] = spats[1];
 	if (spats[1].pat != NULL)
 	    saved_spats[1].pat = vim_strsave(spats[1].pat);
+#ifdef FEAT_SEARCH_EXTRA
 	saved_last_idx = last_idx;
-# ifdef FEAT_SEARCH_EXTRA
 	saved_no_hlsearch = no_hlsearch;
-# endif
+#endif
     }
 }
 
@@ -332,18 +329,17 @@ restore_search_patterns(void)
     {
 	vim_free(spats[0].pat);
 	spats[0] = saved_spats[0];
-# if defined(FEAT_EVAL)
+#if defined(FEAT_EVAL)
 	set_vv_searchforward();
-# endif
+#endif
 	vim_free(spats[1].pat);
 	spats[1] = saved_spats[1];
+#ifdef FEAT_SEARCH_EXTRA
 	last_idx = saved_last_idx;
-# ifdef FEAT_SEARCH_EXTRA
 	SET_NO_HLSEARCH(saved_no_hlsearch);
-# endif
+#endif
     }
 }
-#endif
 
 #if defined(EXITFREE) || defined(PROTO)
     void
@@ -421,7 +417,7 @@ ignorecase_opt(char_u *pat, int ic_in, int scs)
 
     if (ic && !no_smartcase && scs
 #ifdef FEAT_INS_EXPAND
-				&& !(ctrl_x_mode && curbuf->b_p_inf)
+			     && !(ctrl_x_mode_not_default() && curbuf->b_p_inf)
 #endif
 								    )
 	ic = !pat_has_uppercase(pat);
@@ -684,11 +680,11 @@ searchit(
 		    && pos->lnum >= 1 && pos->lnum <= buf->b_ml.ml_line_count
 						    && pos->col < MAXCOL - 2)
 	{
-	    ptr = ml_get_buf(buf, pos->lnum, FALSE) + pos->col;
-	    if (*ptr == NUL)
+	    ptr = ml_get_buf(buf, pos->lnum, FALSE);
+	    if ((int)STRLEN(ptr) <= pos->col)
 		start_char_len = 1;
 	    else
-		start_char_len = (*mb_ptr2len)(ptr);
+		start_char_len = (*mb_ptr2len)(ptr + pos->col);
 	}
 #endif
 	else
@@ -973,7 +969,16 @@ searchit(
 					      NULL, NULL
 #endif
 					    )) == 0)
+			    {
+#ifdef FEAT_RELTIME
+				/* If the search timed out, we did find a match
+				 * but it might be the wrong one, so that's not
+				 * OK. */
+				if (timed_out != NULL && *timed_out)
+				    match_ok = FALSE;
+#endif
 				break;
+			    }
 
 			    /* Need to get the line pointer again, a
 			     * multi-line search may have made it invalid. */
@@ -2675,14 +2680,8 @@ showmatch(
 	    showruler(FALSE);
 	    setcursor();
 	    cursor_on();		/* make sure that the cursor is shown */
-	    out_flush();
-#ifdef FEAT_GUI
-	    if (gui.in_use)
-	    {
-		gui_update_cursor(TRUE, FALSE);
-		gui_mch_flush();
-	    }
-#endif
+	    out_flush_cursor(TRUE, FALSE);
+
 	    /* Restore dollar_vcol(), because setcursor() may call curs_rows()
 	     * which resets it if the matching position is in a previous line
 	     * and has a higher column number. */
@@ -5056,8 +5055,7 @@ find_pattern_in_path(
 				prev_fname = NULL;
 			    }
 			}
-			vim_free(new_fname);
-			new_fname = NULL;
+			VIM_CLEAR(new_fname);
 			already_searched = TRUE;
 			break;
 		    }

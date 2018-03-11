@@ -32,7 +32,7 @@ ui_write(char_u *s, int len)
     {
 	gui_write(s, len);
 	if (p_wd)
-	    gui_wait_for_chars(p_wd);
+	    gui_wait_for_chars(p_wd, typebuf.tb_change_cnt);
 	return;
     }
 #endif
@@ -130,8 +130,7 @@ ui_inchar(
 	if (maxlen >= ta_len - ta_off)
 	{
 	    mch_memmove(buf, ta_str + ta_off, (size_t)ta_len);
-	    vim_free(ta_str);
-	    ta_str = NULL;
+	    VIM_CLEAR(ta_str);
 	    return ta_len;
 	}
 	mch_memmove(buf, ta_str + ta_off, (size_t)maxlen);
@@ -182,18 +181,13 @@ ui_inchar(
 
 #ifdef FEAT_GUI
     if (gui.in_use)
-    {
-	if (gui_wait_for_chars(wtime) && !typebuf_changed(tb_change_cnt))
-	    retval = read_from_input_buf(buf, (long)maxlen);
-    }
+	retval = gui_inchar(buf, maxlen, wtime, tb_change_cnt);
 #endif
 #ifndef NO_CONSOLE
 # ifdef FEAT_GUI
     else
 # endif
-    {
 	retval = mch_inchar(buf, maxlen, wtime, tb_change_cnt);
-    }
 #endif
 
     if (wtime == -1 || wtime > 100L)
@@ -211,6 +205,52 @@ theend:
 #endif
     return retval;
 }
+
+#if defined(FEAT_TIMERS) || defined(PROT)
+/*
+ * Wait for a timer to fire or "wait_func" to return non-zero.
+ * Returns OK when something was read.
+ * Returns FAIL when it timed out or was interrupted.
+ */
+    int
+ui_wait_for_chars_or_timer(
+    long    wtime,
+    int	    (*wait_func)(long wtime, int *interrupted, int ignore_input),
+    int	    *interrupted,
+    int	    ignore_input)
+{
+    int	    due_time;
+    long    remaining = wtime;
+    int	    tb_change_cnt = typebuf.tb_change_cnt;
+
+    /* When waiting very briefly don't trigger timers. */
+    if (wtime >= 0 && wtime < 10L)
+	return wait_func(wtime, NULL, ignore_input);
+
+    while (wtime < 0 || remaining > 0)
+    {
+	/* Trigger timers and then get the time in wtime until the next one is
+	 * due.  Wait up to that time. */
+	due_time = check_due_timer();
+	if (typebuf.tb_change_cnt != tb_change_cnt)
+	{
+	    /* timer may have used feedkeys() */
+	    return FAIL;
+	}
+	if (due_time <= 0 || (wtime > 0 && due_time > remaining))
+	    due_time = remaining;
+	if (wait_func(due_time, interrupted, ignore_input))
+	    return OK;
+	if (interrupted != NULL && *interrupted)
+	    /* Nothing available, but need to return so that side effects get
+	     * handled, such as handling a message on a channel. */
+	    return FAIL;
+	if (wtime > 0)
+	    remaining -= due_time;
+    }
+    return FAIL;
+}
+#endif
 
 /*
  * return non-zero if a character is available
@@ -245,7 +285,7 @@ ui_delay(long msec, int ignoreinput)
 {
 #ifdef FEAT_GUI
     if (gui.in_use && !ignoreinput)
-	gui_wait_for_chars(msec);
+	gui_wait_for_chars(msec, typebuf.tb_change_cnt);
     else
 #endif
 	mch_delay(msec, ignoreinput);
@@ -537,11 +577,7 @@ clip_lose_selection(VimClipboard *cbd)
 	    update_curbuf(INVERTED_ALL);
 	    setcursor();
 	    cursor_on();
-	    out_flush();
-# ifdef FEAT_GUI
-	    if (gui.in_use)
-		gui_update_cursor(TRUE, FALSE);
-# endif
+	    out_flush_cursor(TRUE, FALSE);
 	}
     }
 #endif
@@ -1803,10 +1839,7 @@ fill_input_buf(int exit_on_error UNUSED)
 	    unconverted = restlen;
 	mch_memmove(inbuf + inbufcount, rest, unconverted);
 	if (unconverted == restlen)
-	{
-	    vim_free(rest);
-	    rest = NULL;
-	}
+	    VIM_CLEAR(rest);
 	else
 	{
 	    restlen -= unconverted;
@@ -2794,11 +2827,18 @@ retnomove:
 	 * (MOUSE_FOCUS was set above if we dragged first). */
 	if (dragwin == NULL || (flags & MOUSE_RELEASED))
 	    win_enter(wp, TRUE);		/* can make wp invalid! */
-#ifdef CHECK_DOUBLE_CLICK
-	/* set topline, to be able to check for double click ourselves */
+
 	if (curwin != old_curwin)
+	{
+#ifdef CHECK_DOUBLE_CLICK
+	    /* set topline, to be able to check for double click ourselves */
 	    set_mouse_topline(curwin);
 #endif
+#ifdef FEAT_TERMINAL
+	    /* when entering a terminal window may change state */
+	    term_win_entered();
+#endif
+	}
 	if (on_status_line)			/* In (or below) status line */
 	{
 	    /* Don't use start_arrow() if we're in the same window */
@@ -3166,7 +3206,8 @@ mouse_find_win(int *rowp, int *colp UNUSED)
 
 #if defined(FEAT_GUI_MOTIF) || defined(FEAT_GUI_GTK) || defined(FEAT_GUI_MAC) \
 	|| defined(FEAT_GUI_ATHENA) || defined(FEAT_GUI_MSWIN) \
-	|| defined(FEAT_GUI_PHOTON) || defined(PROTO)
+	|| defined(FEAT_GUI_PHOTON) || defined(FEAT_TERM_POPUP_MENU) \
+	|| defined(PROTO)
 /*
  * Translate window coordinates to buffer position without any side effects
  */
@@ -3212,7 +3253,8 @@ get_fpos_of_mouse(pos_T *mpos)
 
 #if defined(FEAT_GUI_MOTIF) || defined(FEAT_GUI_GTK) || defined(FEAT_GUI_MAC) \
 	|| defined(FEAT_GUI_ATHENA) || defined(FEAT_GUI_MSWIN) \
-	|| defined(FEAT_GUI_PHOTON) || defined(FEAT_BEVAL) || defined(PROTO)
+	|| defined(FEAT_GUI_PHOTON) || defined(FEAT_BEVAL) \
+	|| defined(FEAT_TERM_POPUP_MENU) || defined(PROTO)
 /*
  * Convert a virtual (screen) column to a character column.
  * The first column is one.
@@ -3264,13 +3306,11 @@ ui_focus_change(
 	last_time = time(NULL);
     }
 
-#ifdef FEAT_AUTOCMD
     /*
      * Fire the focus gained/lost autocommand.
      */
     need_redraw |= apply_autocmds(in_focus ? EVENT_FOCUSGAINED
 				: EVENT_FOCUSLOST, NULL, NULL, FALSE, curbuf);
-#endif
 
     if (need_redraw)
     {
@@ -3290,13 +3330,10 @@ ui_focus_change(
 	    setcursor();
 	}
 	cursor_on();	    /* redrawing may have switched it off */
-	out_flush();
+	out_flush_cursor(FALSE, TRUE);
 # ifdef FEAT_GUI
 	if (gui.in_use)
-	{
-	    gui_update_cursor(FALSE, TRUE);
 	    gui_update_scrollbars(FALSE);
-	}
 # endif
     }
 #ifdef FEAT_TITLE
@@ -3307,7 +3344,7 @@ ui_focus_change(
 }
 #endif
 
-#if defined(FEAT_MBYTE) || defined(PROTO)
+#if defined(HAVE_INPUT_METHOD) || defined(PROTO)
 /*
  * Save current Input Method status to specified place.
  */

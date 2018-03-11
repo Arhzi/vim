@@ -1,4 +1,4 @@
-*starting.txt*  For Vim version 8.0.  Last change: 2017 Nov 18
+*starting.txt*  For Vim version 8.0.  Last change: 2018 Mar 01
 
 
 		  VIM REFERENCE MANUAL    by Bram Moolenaar
@@ -516,6 +516,7 @@ a slash.  Thus "-R" means recovery and "-/R" readonly.
 		- the |defaults.vim| script is loaded, which implies
 		  'nocompatible': use Vim defaults
 		- no viminfo file is read or written
+		- the home directory is excluded from 'runtimepath'
 							*-x*
 -x		Use encryption to read/write files.  Will prompt for a key,
 		which is then stored in the 'key' option.  All writes will
@@ -1010,14 +1011,13 @@ Vi compatible default value ~
 When Vim starts, the 'compatible' option is on.  This will be used when Vim
 starts its initializations.  But as soon as:
 - a user vimrc file is found, or
-- a vimrc file in the current directory, or
+- a vimrc file in the current directory is found, or
 - the "VIMINIT" environment variable is set, or
 - the "-N" command line argument is given, or
 - the "--clean" command line argument is given, or
-  even when no vimrc file exists.
 - the |defaults.vim| script is loaded, or
-- gvimrc file was found,
-then it will be set to 'nocompatible'.
+- a gvimrc file was found,
+then the option will be set to 'nocompatible'.
 
 Note that this does NOT happen when a system-wide vimrc file was found.
 
@@ -1043,7 +1043,7 @@ giving the mapping.
 Defaults without a .vimrc file ~
 							*defaults.vim*
 If Vim is started normally and no user vimrc file is found, the
-$VIMRUTIME/defaults.vim script is loaded.  This will set 'compatible' off,
+$VIMRUNTIME/defaults.vim script is loaded.  This will set 'compatible' off,
 switch on syntax highlighting and a few more things.  See the script for
 details.  NOTE: this is done since Vim 8.0, not in Vim 7.4. (it was added in
 patch 7.4.2111 to be exact).

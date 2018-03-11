@@ -535,8 +535,7 @@ ml_set_crypt_key(
 	idx = 0;		/* start with first index in block 1 */
 	error = 0;
 	buf->b_ml.ml_stack_top = 0;
-	vim_free(buf->b_ml.ml_stack);
-	buf->b_ml.ml_stack = NULL;
+	VIM_CLEAR(buf->b_ml.ml_stack);
 	buf->b_ml.ml_stack_size = 0;	/* no stack yet */
 
 	for ( ; !got_int; line_breakcheck())
@@ -852,8 +851,7 @@ ml_close(buf_T *buf, int del_file)
 	vim_free(buf->b_ml.ml_line_ptr);
     vim_free(buf->b_ml.ml_stack);
 #ifdef FEAT_BYTEOFF
-    vim_free(buf->b_ml.ml_chunksize);
-    buf->b_ml.ml_chunksize = NULL;
+    VIM_CLEAR(buf->b_ml.ml_chunksize);
 #endif
     buf->b_ml.ml_mfp = NULL;
 
@@ -1734,13 +1732,11 @@ theend:
     }
     if (serious_error && called_from_main)
 	ml_close(curbuf, TRUE);
-#ifdef FEAT_AUTOCMD
     else
     {
 	apply_autocmds(EVENT_BUFREADPOST, NULL, curbuf->b_fname, FALSE, curbuf);
 	apply_autocmds(EVENT_BUFWINENTER, NULL, curbuf->b_fname, FALSE, curbuf);
     }
-#endif
     return;
 }
 
@@ -4073,7 +4069,7 @@ attention_message(
     --no_wait_return;
 }
 
-#ifdef FEAT_AUTOCMD
+#if defined(FEAT_EVAL)
 static int do_swapexists(buf_T *buf, char_u *fname);
 
 /*
@@ -4197,8 +4193,7 @@ findswapname(
 	    break;
 	if ((n = (int)STRLEN(fname)) == 0)	/* safety check */
 	{
-	    vim_free(fname);
-	    fname = NULL;
+	    VIM_CLEAR(fname);
 	    break;
 	}
 #if defined(UNIX)
@@ -4453,7 +4448,7 @@ findswapname(
 #if (defined(UNIX) || defined(VMS)) && (defined(FEAT_GUI_DIALOG) || defined(FEAT_CON_DIALOG))
 		    process_still_running = FALSE;
 #endif
-#ifdef FEAT_AUTOCMD
+#if defined(FEAT_EVAL)
 		    /*
 		     * If there is an SwapExists autocommand and we can handle
 		     * the response, trigger it.  It may return 0 to ask the
@@ -4578,8 +4573,7 @@ findswapname(
 	    if (fname[n - 2] == 'a')    /* ".saa": tried enough, give up */
 	    {
 		EMSG(_("E326: Too many swap files found"));
-		vim_free(fname);
-		fname = NULL;
+		VIM_CLEAR(fname);
 		break;
 	    }
 	    --fname[n - 2];		/* ".svz", ".suz", etc. */
