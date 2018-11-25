@@ -126,7 +126,7 @@ endfunc
 " This function checks if one of the first ten lines start with a '@'.  In
 " that case it is probably a change file.
 " If the first line starts with # or ! it's probably a ch file.
-" If a line has "main", "include", "//" ir "/*" it's probably ch.
+" If a line has "main", "include", "//" or "/*" it's probably ch.
 " Otherwise CHILL is assumed.
 func dist#ft#FTchange()
   let lnum = 1
@@ -632,7 +632,7 @@ endfunc
 " Choose context, plaintex, or tex (LaTeX) based on these rules:
 " 1. Check the first line of the file for "%&<format>".
 " 2. Check the first 1000 non-comment lines for LaTeX or ConTeXt keywords.
-" 3. Default to "latex" or to g:tex_flavor, can be set in user's vimrc.
+" 3. Default to "plain" or to g:tex_flavor, can be set in user's vimrc.
 func dist#ft#FTtex()
   let firstline = getline(1)
   if firstline =~ '^%&\s*\a\+'

@@ -47,6 +47,19 @@ dict_alloc(void)
     return d;
 }
 
+/*
+ * dict_alloc() with an ID for alloc_fail().
+ */
+    dict_T *
+dict_alloc_id(alloc_id_T id UNUSED)
+{
+#ifdef FEAT_EVAL
+    if (alloc_fail_id == id && alloc_does_fail((long_u)sizeof(list_T)))
+	return NULL;
+#endif
+    return (dict_alloc());
+}
+
     dict_T *
 dict_alloc_lock(int lock)
 {
@@ -188,7 +201,8 @@ dict_free_items(int copyID)
 /*
  * Allocate a Dictionary item.
  * The "key" is copied to the new item.
- * Note that the value of the item "di_tv" still needs to be initialized!
+ * Note that the type and value of the item "di_tv" still needs to be
+ * initialized!
  * Returns NULL when out of memory.
  */
     dictitem_T *
@@ -201,6 +215,7 @@ dictitem_alloc(char_u *key)
     {
 	STRCPY(di->di_key, key);
 	di->di_flags = DI_FLAGS_ALLOC;
+	di->di_tv.v_lock = 0;
     }
     return di;
 }
@@ -327,33 +342,41 @@ dict_add(dict_T *d, dictitem_T *item)
 }
 
 /*
- * Add a number or string entry to dictionary "d".
- * When "str" is NULL use number "nr", otherwise use "str".
+ * Add a number entry to dictionary "d".
  * Returns FAIL when out of memory and when key already exists.
  */
     int
-dict_add_nr_str(
-    dict_T	*d,
-    char	*key,
-    varnumber_T	nr,
-    char_u	*str)
+dict_add_number(dict_T *d, char *key, varnumber_T nr)
 {
     dictitem_T	*item;
 
     item = dictitem_alloc((char_u *)key);
     if (item == NULL)
 	return FAIL;
-    item->di_tv.v_lock = 0;
-    if (str == NULL)
+    item->di_tv.v_type = VAR_NUMBER;
+    item->di_tv.vval.v_number = nr;
+    if (dict_add(d, item) == FAIL)
     {
-	item->di_tv.v_type = VAR_NUMBER;
-	item->di_tv.vval.v_number = nr;
+	dictitem_free(item);
+	return FAIL;
     }
-    else
-    {
-	item->di_tv.v_type = VAR_STRING;
-	item->di_tv.vval.v_string = vim_strsave(str);
-    }
+    return OK;
+}
+
+/*
+ * Add a string entry to dictionary "d".
+ * Returns FAIL when out of memory and when key already exists.
+ */
+    int
+dict_add_string(dict_T *d, char *key, char_u *str)
+{
+    dictitem_T	*item;
+
+    item = dictitem_alloc((char_u *)key);
+    if (item == NULL)
+	return FAIL;
+    item->di_tv.v_type = VAR_STRING;
+    item->di_tv.vval.v_string = str != NULL ? vim_strsave(str) : NULL;
     if (dict_add(d, item) == FAIL)
     {
 	dictitem_free(item);
@@ -374,7 +397,6 @@ dict_add_list(dict_T *d, char *key, list_T *list)
     item = dictitem_alloc((char_u *)key);
     if (item == NULL)
 	return FAIL;
-    item->di_tv.v_lock = 0;
     item->di_tv.v_type = VAR_LIST;
     item->di_tv.vval.v_list = list;
     ++list->lv_refcount;
@@ -398,7 +420,6 @@ dict_add_dict(dict_T *d, char *key, dict_T *dict)
     item = dictitem_alloc((char_u *)key);
     if (item == NULL)
 	return FAIL;
-    item->di_tv.v_lock = 0;
     item->di_tv.v_type = VAR_DICT;
     item->di_tv.vval.v_dict = dict;
     ++dict->dv_refcount;

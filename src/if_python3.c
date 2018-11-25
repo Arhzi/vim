@@ -34,11 +34,6 @@
 
 #include <limits.h>
 
-/* Python.h defines _POSIX_THREADS itself (if needed) */
-#ifdef _POSIX_THREADS
-# undef _POSIX_THREADS
-#endif
-
 #if defined(_WIN32) && defined(HAVE_FCNTL_H)
 # undef HAVE_FCNTL_H
 #endif
@@ -172,6 +167,11 @@ typedef PySliceObject PySliceObject_T;
 # define PySequence_Fast py3_PySequence_Fast
 # define PyTuple_Size py3_PyTuple_Size
 # define PyTuple_GetItem py3_PyTuple_GetItem
+# if PY_VERSION_HEX >= 0x030601f0
+#  define PySlice_AdjustIndices py3_PySlice_AdjustIndices
+#  define PySlice_Unpack py3_PySlice_Unpack
+# endif
+# undef PySlice_GetIndicesEx
 # define PySlice_GetIndicesEx py3_PySlice_GetIndicesEx
 # define PyImport_ImportModule py3_PyImport_ImportModule
 # define PyObject_Init py3__PyObject_Init
@@ -236,6 +236,7 @@ typedef PySliceObject PySliceObject_T;
 # define PyFloat_AsDouble py3_PyFloat_AsDouble
 # define PyObject_GenericGetAttr py3_PyObject_GenericGetAttr
 # define PyType_Type (*py3_PyType_Type)
+# define PyStdPrinter_Type (*py3_PyStdPrinter_Type)
 # define PySlice_Type (*py3_PySlice_Type)
 # define PyFloat_Type (*py3_PyFloat_Type)
 # define PyNumber_Check (*py3_PyNumber_Check)
@@ -309,6 +310,12 @@ static Py_ssize_t (*py3_PyTuple_Size)(PyObject *);
 static PyObject* (*py3_PyTuple_GetItem)(PyObject *, Py_ssize_t);
 static int (*py3_PyMapping_Check)(PyObject *);
 static PyObject* (*py3_PyMapping_Keys)(PyObject *);
+# if PY_VERSION_HEX >= 0x030601f0
+static int (*py3_PySlice_AdjustIndices)(Py_ssize_t length,
+		     Py_ssize_t *start, Py_ssize_t *stop, Py_ssize_t step);
+static int (*py3_PySlice_Unpack)(PyObject *slice,
+		     Py_ssize_t *start, Py_ssize_t *stop, Py_ssize_t *step);
+# endif
 static int (*py3_PySlice_GetIndicesEx)(PySliceObject_T *r, Py_ssize_t length,
 		     Py_ssize_t *start, Py_ssize_t *stop, Py_ssize_t *step,
 		     Py_ssize_t *slicelen);
@@ -393,6 +400,7 @@ static PyObject* (*py3_PyObject_GenericGetAttr)(PyObject *obj, PyObject *name);
 static PyObject* (*py3_PyType_GenericAlloc)(PyTypeObject *type, Py_ssize_t nitems);
 static PyObject* (*py3_PyType_GenericNew)(PyTypeObject *type, PyObject *args, PyObject *kwds);
 static PyTypeObject* py3_PyType_Type;
+static PyTypeObject* py3_PyStdPrinter_Type;
 static PyTypeObject* py3_PySlice_Type;
 static PyTypeObject* py3_PyFloat_Type;
 static PyTypeObject* py3_PyBool_Type;
@@ -477,6 +485,10 @@ static struct
     {"PySequence_Fast", (PYTHON_PROC*)&py3_PySequence_Fast},
     {"PyTuple_Size", (PYTHON_PROC*)&py3_PyTuple_Size},
     {"PyTuple_GetItem", (PYTHON_PROC*)&py3_PyTuple_GetItem},
+# if PY_VERSION_HEX >= 0x030601f0
+    {"PySlice_AdjustIndices", (PYTHON_PROC*)&py3_PySlice_AdjustIndices},
+    {"PySlice_Unpack", (PYTHON_PROC*)&py3_PySlice_Unpack},
+# endif
     {"PySlice_GetIndicesEx", (PYTHON_PROC*)&py3_PySlice_GetIndicesEx},
     {"PyErr_NoMemory", (PYTHON_PROC*)&py3_PyErr_NoMemory},
     {"Py_Finalize", (PYTHON_PROC*)&py3_Py_Finalize},
@@ -553,6 +565,7 @@ static struct
     {"PyType_GenericAlloc", (PYTHON_PROC*)&py3_PyType_GenericAlloc},
     {"PyType_GenericNew", (PYTHON_PROC*)&py3_PyType_GenericNew},
     {"PyType_Type", (PYTHON_PROC*)&py3_PyType_Type},
+    {"PyStdPrinter_Type", (PYTHON_PROC*)&py3_PyStdPrinter_Type},
     {"PySlice_Type", (PYTHON_PROC*)&py3_PySlice_Type},
     {"PyFloat_Type", (PYTHON_PROC*)&py3_PyFloat_Type},
     {"PyBool_Type", (PYTHON_PROC*)&py3_PyBool_Type},
@@ -605,7 +618,10 @@ end_dynamic_python3(void)
 py3_runtime_link_init(char *libname, int verbose)
 {
     int i;
-    void *ucs_from_string, *ucs_decode, *ucs_as_encoded_string;
+    PYTHON_PROC *ucs_from_string = (PYTHON_PROC *)&py3_PyUnicode_FromString;
+    PYTHON_PROC *ucs_decode = (PYTHON_PROC *)&py3_PyUnicode_Decode;
+    PYTHON_PROC *ucs_as_encoded_string =
+				 (PYTHON_PROC *)&py3_PyUnicode_AsEncodedString;
 
 # if !(defined(PY_NO_RTLD_GLOBAL) && defined(PY3_NO_RTLD_GLOBAL)) && defined(UNIX) && defined(FEAT_PYTHON)
     /* Can't have Python and Python3 loaded at the same time.
@@ -646,33 +662,29 @@ py3_runtime_link_init(char *libname, int verbose)
     /* Load unicode functions separately as only the ucs2 or the ucs4 functions
      * will be present in the library. */
 # if PY_VERSION_HEX >= 0x030300f0
-    ucs_from_string = symbol_from_dll(hinstPy3, "PyUnicode_FromString");
-    ucs_decode = symbol_from_dll(hinstPy3, "PyUnicode_Decode");
-    ucs_as_encoded_string = symbol_from_dll(hinstPy3,
+    *ucs_from_string = symbol_from_dll(hinstPy3, "PyUnicode_FromString");
+    *ucs_decode = symbol_from_dll(hinstPy3, "PyUnicode_Decode");
+    *ucs_as_encoded_string = symbol_from_dll(hinstPy3,
 	    "PyUnicode_AsEncodedString");
 # else
-    ucs_from_string = symbol_from_dll(hinstPy3, "PyUnicodeUCS2_FromString");
-    ucs_decode = symbol_from_dll(hinstPy3,
+    *ucs_from_string = symbol_from_dll(hinstPy3, "PyUnicodeUCS2_FromString");
+    *ucs_decode = symbol_from_dll(hinstPy3,
 	    "PyUnicodeUCS2_Decode");
-    ucs_as_encoded_string = symbol_from_dll(hinstPy3,
+    *ucs_as_encoded_string = symbol_from_dll(hinstPy3,
 	    "PyUnicodeUCS2_AsEncodedString");
-    if (!ucs_from_string || !ucs_decode || !ucs_as_encoded_string)
+    if (*ucs_from_string == NULL || *ucs_decode == NULL
+					     || *ucs_as_encoded_string == NULL)
     {
-	ucs_from_string = symbol_from_dll(hinstPy3,
+	*ucs_from_string = symbol_from_dll(hinstPy3,
 		"PyUnicodeUCS4_FromString");
-	ucs_decode = symbol_from_dll(hinstPy3,
+	*ucs_decode = symbol_from_dll(hinstPy3,
 		"PyUnicodeUCS4_Decode");
-	ucs_as_encoded_string = symbol_from_dll(hinstPy3,
+	*ucs_as_encoded_string = symbol_from_dll(hinstPy3,
 		"PyUnicodeUCS4_AsEncodedString");
     }
 # endif
-    if (ucs_from_string && ucs_decode && ucs_as_encoded_string)
-    {
-	py3_PyUnicode_FromString = ucs_from_string;
-	py3_PyUnicode_Decode = ucs_decode;
-	py3_PyUnicode_AsEncodedString = ucs_as_encoded_string;
-    }
-    else
+    if (*ucs_from_string == NULL || *ucs_decode == NULL
+					     || *ucs_as_encoded_string == NULL)
     {
 	close_dll(hinstPy3);
 	hinstPy3 = 0;
@@ -697,8 +709,6 @@ python3_enabled(int verbose)
 /* Load the standard Python exceptions - don't import the symbols from the
  * DLL, as this can cause errors (importing data symbols is not reliable).
  */
-static void get_py3_exceptions(void);
-
     static void
 get_py3_exceptions(void)
 {
@@ -776,8 +786,6 @@ static PyObject *ListGetattro(PyObject *, PyObject *);
 static int ListSetattro(PyObject *, PyObject *, PyObject *);
 static PyObject *FunctionGetattro(PyObject *, PyObject *);
 
-static PyObject *VimPathHook(PyObject *, PyObject *);
-
 static struct PyModuleDef vimmodule;
 
 #define PY_CAN_RECURSE
@@ -821,7 +829,7 @@ python3_end(void)
 #endif
     if (Py_IsInitialized())
     {
-	// acquire lock before finalizing
+	/* acquire lock before finalizing */
 	PyGILState_Ensure();
 
 	Py_Finalize();

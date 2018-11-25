@@ -2,7 +2,7 @@
 " Header: "{{{
 " Maintainer:	Bram Moolenaar
 " Original Author: Andy Wokula <anwoku@yahoo.de>
-" Last Change:	2018 Mar 09
+" Last Change:	2018 Mar 28
 " Version:	1.0
 " Description:	HTML indent script with cached state for faster indenting on a
 "		range of lines.
@@ -216,7 +216,8 @@ endfunc "}}}
 " Add known tag pairs.
 " Self-closing tags and tags that are sometimes {{{
 " self-closing (e.g., <p>) are not here (when encountering </p> we can find
-" the matching <p>, but not the other way around).
+" the matching <p>, but not the other way around).  Known self-closing tags:
+" 'p', 'img', 'source'.
 " Old HTML tags:
 call s:AddITags(s:indent_tags, [
     \ 'a', 'abbr', 'acronym', 'address', 'b', 'bdo', 'big',
@@ -233,9 +234,9 @@ call s:AddITags(s:indent_tags, [
 call s:AddITags(s:indent_tags, [
     \ 'area', 'article', 'aside', 'audio', 'bdi', 'canvas',
     \ 'command', 'data', 'datalist', 'details', 'embed', 'figcaption',
-    \ 'figure', 'footer', 'header', 'keygen', 'mark', 'meter', 'nav', 'output',
-    \ 'progress', 'rp', 'rt', 'ruby', 'section', 'source', 'summary', 'svg', 
-    \ 'time', 'track', 'video', 'wbr'])
+    \ 'figure', 'footer', 'header', 'keygen', 'main', 'mark', 'meter',
+    \ 'nav', 'output', 'picture', 'progress', 'rp', 'rt', 'ruby', 'section',
+    \ 'summary', 'svg', 'time', 'track', 'video', 'wbr'])
 
 " Tags added for web components:
 call s:AddITags(s:indent_tags, [
@@ -624,7 +625,7 @@ func! s:CSSIndent()
     return eval(b:hi_css1indent)
   endif
 
-  " If the current line starts with "}" align with it's match.
+  " If the current line starts with "}" align with its match.
   if curtext =~ '^\s*}'
     call cursor(v:lnum, 1)
     try
@@ -662,7 +663,7 @@ func! s:CSSIndent()
     else
       let cur_hasfield = curtext =~ '^\s*[a-zA-Z0-9-]\+:'
       let prev_unfinished = s:CssUnfinished(prev_text)
-      if !cur_hasfield && (prev_hasfield || prev_unfinished)
+      if prev_unfinished
         " Continuation line has extra indent if the previous line was not a
         " continuation line.
         let extra = shiftwidth()
@@ -715,9 +716,13 @@ func! s:CSSIndent()
 endfunc "}}}
 
 " Inside <style>: Whether a line is unfinished.
+" 	tag:
+" 	tag: blah
+" 	tag: blah &&
+" 	tag: blah ||
 func! s:CssUnfinished(text)
   "{{{
-  return a:text =~ '\s\(||\|&&\|:\)\s*$'
+  return a:text =~ '\(||\|&&\|:\|\k\)\s*$'
 endfunc "}}}
 
 " Search back for the first unfinished line above "lnum".

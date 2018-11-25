@@ -19,12 +19,10 @@
 
 #include "vim.h"
 
-static void comp_botline(win_T *wp);
 static void redraw_for_cursorline(win_T *wp);
 static int scrolljump_value(void);
 static int check_top_offset(void);
 static void curs_rows(win_T *wp);
-static void validate_cheight(void);
 
 typedef struct
 {
@@ -37,11 +35,6 @@ typedef struct
 
 static void topline_back(lineoff_T *lp);
 static void botline_forw(lineoff_T *lp);
-#ifdef FEAT_DIFF
-static void botline_topline(lineoff_T *lp);
-static void topline_botline(lineoff_T *lp);
-static void max_topfill(void);
-#endif
 
 /*
  * Compute wp->w_botline for the current wp->w_topline.  Can be called after
@@ -123,6 +116,14 @@ comp_botline(win_T *wp)
     set_empty_rows(wp, done);
 }
 
+#ifdef FEAT_SYN_HL
+    void
+reset_cursorline(void)
+{
+    curwin->w_last_cursorline = 0;
+}
+#endif
+
 /*
  * Redraw when w_cline_row changes and 'relativenumber' or 'cursorline' is
  * set.
@@ -140,7 +141,28 @@ redraw_for_cursorline(win_T *wp)
 	    && !pum_visible()
 # endif
 	    )
-	redraw_win_later(wp, SOME_VALID);
+    {
+	if (wp->w_p_rnu)
+	    // win_line() will redraw the number column only.
+	    redraw_win_later(wp, VALID);
+#ifdef FEAT_SYN_HL
+	if (wp->w_p_cul)
+	{
+	    if (wp->w_redr_type <= VALID && wp->w_last_cursorline != 0)
+	    {
+		// "w_last_cursorline" may be outdated, worst case we redraw
+		// too much.  This is optimized for moving the cursor around in
+		// the current window.
+		redrawWinline(wp, wp->w_last_cursorline, FALSE);
+		redrawWinline(wp, wp->w_cursor.lnum, FALSE);
+		redraw_win_later(wp, VALID);
+	    }
+	    else
+		redraw_win_later(wp, SOME_VALID);
+	    wp->w_last_cursorline = wp->w_cursor.lnum;
+	}
+#endif
+    }
 }
 
 /*
@@ -1939,7 +1961,7 @@ scroll_cursor_bot(int min_scroll, int set_topbot)
 	    scrolled += loff.height;
 	    if (loff.lnum == curwin->w_botline
 #ifdef FEAT_DIFF
-			    && boff.fill == 0
+			    && loff.fill == 0
 #endif
 		    )
 		scrolled -= curwin->w_empty_rows;
@@ -2457,22 +2479,27 @@ onepage(int dir, long count)
 	beginline(BL_SOL | BL_FIX);
     curwin->w_valid &= ~(VALID_WCOL|VALID_WROW|VALID_VIRTCOL);
 
-    /*
-     * Avoid the screen jumping up and down when 'scrolloff' is non-zero.
-     * But make sure we scroll at least one line (happens with mix of long
-     * wrapping lines and non-wrapping line).
-     */
-    if (retval == OK && dir == FORWARD && check_top_offset())
+    if (retval == OK && dir == FORWARD)
     {
-	scroll_cursor_top(1, FALSE);
-	if (curwin->w_topline <= old_topline
-				  && old_topline < curbuf->b_ml.ml_line_count)
+	// Avoid the screen jumping up and down when 'scrolloff' is non-zero.
+	// But make sure we scroll at least one line (happens with mix of long
+	// wrapping lines and non-wrapping line).
+	if (check_top_offset())
 	{
-	    curwin->w_topline = old_topline + 1;
+	    scroll_cursor_top(1, FALSE);
+	    if (curwin->w_topline <= old_topline
+				  && old_topline < curbuf->b_ml.ml_line_count)
+	    {
+		curwin->w_topline = old_topline + 1;
 #ifdef FEAT_FOLDING
+		(void)hasFolding(curwin->w_topline, &curwin->w_topline, NULL);
+#endif
+	    }
+	}
+#ifdef FEAT_FOLDING
+	else if (curwin->w_botline > curbuf->b_ml.ml_line_count)
 	    (void)hasFolding(curwin->w_topline, &curwin->w_topline, NULL);
 #endif
-	}
     }
 
     redraw_later(VALID);

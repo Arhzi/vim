@@ -138,7 +138,6 @@ static void gui_x11_send_event_handler(Widget, XtPointer, XEvent *, Boolean *);
 #endif
 static void gui_x11_wm_protocol_handler(Widget, XtPointer, XEvent *, Boolean *);
 static Cursor gui_x11_create_blank_mouse(void);
-static void draw_curl(int row, int col, int cells);
 
 
 /*
@@ -1282,6 +1281,17 @@ gui_mch_init_check(void)
 		cmdline_options, XtNumber(cmdline_options),
 		CARDINAL &gui_argc, gui_argv);
 
+# if defined(FEAT_FLOAT) && defined(LC_NUMERIC)
+    {
+	/* The call to XtOpenDisplay() may have set the locale from the
+	 * environment. Set LC_NUMERIC to "C" to make sure that strtod() uses a
+	 * decimal point, not a comma. */
+	char *p = setlocale(LC_NUMERIC, NULL);
+
+	if (p == NULL || strcmp(p, "C") != 0)
+	   setlocale(LC_NUMERIC, "C");
+    }
+# endif
     if (app_context == NULL || gui.dpy == NULL)
     {
 	gui.dying = TRUE;
@@ -1297,8 +1307,6 @@ gui_mch_init_check(void)
  * Handle XSMP processing, de-registering the attachment upon error
  */
 static XtInputId _xsmp_xtinputid;
-
-static void local_xsmp_handle_requests(XtPointer c, int *s, XtInputId *i);
 
     static void
 local_xsmp_handle_requests(
@@ -2296,14 +2304,23 @@ gui_mch_get_color(char_u *name)
     guicolor_T
 gui_mch_get_rgb_color(int r, int g, int b)
 {
-    char	spec[8]; /* space enough to hold "#RRGGBB" */
     XColor	available;
     Colormap	colormap;
 
+/* Using XParseColor() is very slow, put rgb in XColor directly.
+
+    char	spec[8]; // space enough to hold "#RRGGBB"
     vim_snprintf(spec, sizeof(spec), "#%.2x%.2x%.2x", r, g, b);
-    colormap = DefaultColormap(gui.dpy, DefaultScreen(gui.dpy));
     if (XParseColor(gui.dpy, colormap, (char *)spec, &available) != 0
 	    && XAllocColor(gui.dpy, colormap, &available) != 0)
+	return (guicolor_T)available.pixel;
+*/
+    colormap = DefaultColormap(gui.dpy, DefaultScreen(gui.dpy));
+    vim_memset(&available, 0, sizeof(XColor));
+    available.red = r << 8;
+    available.green = g << 8;
+    available.blue = b << 8;
+    if (XAllocColor(gui.dpy, colormap, &available) != 0)
 	return (guicolor_T)available.pixel;
 
     return INVALCOLOR;

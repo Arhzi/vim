@@ -19,7 +19,6 @@
 #if defined(FEAT_EVAL) || defined(PROTO)
 
 static int json_encode_item(garray_T *gap, typval_T *val, int copyID, int options);
-static int json_decode_item(js_read_T *reader, typval_T *res, int options);
 
 /*
  * Encode "val" into a JSON format string.
@@ -217,7 +216,7 @@ json_encode_item(garray_T *gap, typval_T *val, int copyID, int options)
 
 	case VAR_NUMBER:
 	    vim_snprintf((char *)numbuf, NUMBUFLEN, "%lld",
-						    val->vval.v_number);
+						(long long)val->vval.v_number);
 	    ga_concat(gap, numbuf);
 	    break;
 
@@ -621,7 +620,9 @@ json_decode_item(js_read_T *reader, typval_T *res, int options)
 	if (top_item != NULL && top_item->jd_type == JSON_OBJECT_KEY
 		&& (options & JSON_JS)
 		&& reader->js_buf[reader->js_used] != '"'
-		&& reader->js_buf[reader->js_used] != '\'')
+		&& reader->js_buf[reader->js_used] != '\''
+		&& reader->js_buf[reader->js_used] != '['
+		&& reader->js_buf[reader->js_used] != '{')
 	{
 	    char_u *key;
 
@@ -642,6 +643,11 @@ json_decode_item(js_read_T *reader, typval_T *res, int options)
 	    switch (*p)
 	    {
 		case '[': /* start of array */
+		    if (top_item && top_item->jd_type == JSON_OBJECT_KEY)
+		    {
+			retval = FAIL;
+			break;
+		    }
 		    if (ga_grow(&stack, 1) == FAIL)
 		    {
 			retval = FAIL;
@@ -668,6 +674,11 @@ json_decode_item(js_read_T *reader, typval_T *res, int options)
 		    continue;
 
 		case '{': /* start of object */
+		    if (top_item && top_item->jd_type == JSON_OBJECT_KEY)
+		    {
+			retval = FAIL;
+			break;
+		    }
 		    if (ga_grow(&stack, 1) == FAIL)
 		    {
 			retval = FAIL;

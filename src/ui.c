@@ -403,9 +403,17 @@ ui_breakcheck(void)
     void
 ui_breakcheck_force(int force)
 {
-    int save_us = updating_screen;
+    static int	recursive = FALSE;
+    int		save_updating_screen = updating_screen;
 
-    /* We do not want gui_resize_shell() to redraw the screen here. */
+    // We could be called recursively if stderr is redirected, calling
+    // fill_input_buf() calls settmode() when stdin isn't a tty.  settmode()
+    // calls vgetorpeek() which calls ui_breakcheck() again.
+    if (recursive)
+	return;
+    recursive = TRUE;
+
+    // We do not want gui_resize_shell() to redraw the screen here.
     ++updating_screen;
 
 #ifdef FEAT_GUI
@@ -415,7 +423,12 @@ ui_breakcheck_force(int force)
 #endif
 	mch_breakcheck(force);
 
-    updating_screen = save_us;
+    if (save_updating_screen)
+	updating_screen = TRUE;
+    else
+	reset_updating_screen(FALSE);
+
+    recursive = FALSE;
 }
 
 /*****************************************************************************
@@ -712,7 +725,6 @@ clip_isautosel_plus(void)
  * Stuff for general mouse selection, without using Visual mode.
  */
 
-static int clip_compare_pos(int row1, int col1, int row2, int col2);
 static void clip_invert_area(int, int, int, int, int how);
 static void clip_invert_rectangle(int row, int col, int height, int width, int invert);
 static void clip_get_word_boundaries(VimClipboard *, int, int);
@@ -1854,18 +1866,15 @@ fill_input_buf(int exit_on_error UNUSED)
     len = 0;	/* to avoid gcc warning */
     for (try = 0; try < 100; ++try)
     {
-#  ifdef VMS
-	len = vms_read(
-#  else
-	len = read(read_cmd_fd,
-#  endif
-	    (char *)inbuf + inbufcount, (size_t)((INBUFLEN - inbufcount)
+	size_t readlen = (size_t)((INBUFLEN - inbufcount)
 #  ifdef FEAT_MBYTE
-		/ input_conv.vc_factor
+			    / input_conv.vc_factor
 #  endif
-		));
-#  if 0
-		)	/* avoid syntax highlight error */
+			    );
+#  ifdef VMS
+	len = vms_read((char *)inbuf + inbufcount, readlen);
+#  else
+	len = read(read_cmd_fd, (char *)inbuf + inbufcount, readlen);
 #  endif
 
 	if (len > 0 || got_int)
@@ -1885,7 +1894,7 @@ fill_input_buf(int exit_on_error UNUSED)
 #ifdef HAVE_DUP
 	    /* Use stderr for stdin, also works for shell commands. */
 	    close(0);
-	    ignored = dup(2);
+	    vim_ignored = dup(2);
 #else
 	    read_cmd_fd = 2;	/* read from stderr instead of stdin */
 #endif
@@ -1974,7 +1983,7 @@ ui_cursor_shape_forced(int forced)
 # endif
 
 # ifdef FEAT_CONCEAL
-    conceal_check_cursur_line();
+    conceal_check_cursor_line();
 # endif
 }
 
@@ -2069,8 +2078,6 @@ x11_setup_atoms(Display *dpy)
 static Boolean	clip_x11_convert_selection_cb(Widget w, Atom *sel_atom, Atom *target, Atom *type, XtPointer *value, long_u *length, int *format);
 static void clip_x11_lose_ownership_cb(Widget w, Atom *sel_atom);
 static void clip_x11_notify_cb(Widget w, Atom *sel_atom, Atom *target);
-static void clip_x11_timestamp_cb(Widget w, XtPointer n, XEvent *event, Boolean *cont);
-static void clip_x11_request_selection_cb(Widget w, XtPointer success, Atom *sel_atom, Atom *type, XtPointer value, long_u *length, int *format);
 
 /*
  * Property callback to get a timestamp for XtOwnSelection.

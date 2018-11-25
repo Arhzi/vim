@@ -18,17 +18,6 @@
  * changed beyond recognition.
  */
 
-/*
- * Some systems have a prototype for select() that has (int *) instead of
- * (fd_set *), which is wrong. This define removes that prototype. We define
- * our own prototype below.
- * Don't use it for the Mac, it causes a warning for precompiled headers.
- * TODO: use a configure check for precompiled headers?
- */
-#if !defined(__APPLE__) && !defined(__TANDEM)
-# define select select_declared_wrong
-#endif
-
 #include "vim.h"
 
 #ifdef FEAT_MZSCHEME
@@ -54,14 +43,9 @@ static int selinux_enabled = -1;
 # endif
 #endif
 
-/*
- * Use this prototype for select, some include files have a wrong prototype
- */
-#ifndef __TANDEM
+#ifdef __BEOS__
 # undef select
-# ifdef __BEOS__
-#  define select	beos_select
-# endif
+# define select	beos_select
 #endif
 
 #ifdef __CYGWIN__
@@ -75,10 +59,6 @@ static int selinux_enabled = -1;
 #   include "winclip.pro"
 #  endif
 # endif
-#endif
-
-#if defined(HAVE_SELECT)
-extern int   select(int, fd_set *, fd_set *, fd_set *, struct timeval *);
 #endif
 
 #ifdef FEAT_MOUSE_GPM
@@ -148,19 +128,13 @@ static void xterm_update(void);
 Window	    x11_window = 0;
 # endif
 Display	    *x11_display = NULL;
-
-# ifdef FEAT_TITLE
-static int  get_x11_windis(void);
-static void set_x11_title(char_u *);
-static void set_x11_icon(char_u *);
-# endif
 #endif
 
 #ifdef FEAT_TITLE
 static int get_x11_title(int);
-static int get_x11_icon(int);
 
 static char_u	*oldtitle = NULL;
+static volatile sig_atomic_t oldtitle_outdated = FALSE;
 static int	did_set_title = FALSE;
 static char_u	*oldicon = NULL;
 static int	did_set_icon = FALSE;
@@ -173,8 +147,6 @@ typedef union wait waitstatus;
 #else
 typedef int waitstatus;
 #endif
-static pid_t wait4pid(pid_t, waitstatus *);
-
 static int  WaitForChar(long msec, int *interrupted, int ignore_input);
 static int  WaitForCharOrMouse(long msec, int *interrupted, int ignore_input);
 #if defined(__BEOS__) || defined(VMS)
@@ -204,7 +176,7 @@ static RETSIGTYPE catch_sigpwr SIGPROTOARG;
 # define SET_SIG_ALARM
 static RETSIGTYPE sig_alarm SIGPROTOARG;
 /* volatile because it is used in signal handler sig_alarm(). */
-static volatile int sig_alarm_called;
+static volatile sig_atomic_t sig_alarm_called;
 #endif
 static RETSIGTYPE deathtrap SIGPROTOARG;
 
@@ -230,13 +202,13 @@ static int save_patterns(int num_pat, char_u **pat, int *num_file, char_u ***fil
 #endif
 
 /* volatile because it is used in signal handler sig_winch(). */
-static volatile int do_resize = FALSE;
+static volatile sig_atomic_t do_resize = FALSE;
 static char_u	*extra_shell_arg = NULL;
 static int	show_shell_mess = TRUE;
 /* volatile because it is used in signal handler deathtrap(). */
-static volatile int deadly_signal = 0;	    /* The signal we caught */
+static volatile sig_atomic_t deadly_signal = 0;	   /* The signal we caught */
 /* volatile because it is used in signal handler deathtrap(). */
-static volatile int in_mch_delay = FALSE;    /* sleeping in mch_delay() */
+static volatile sig_atomic_t in_mch_delay = FALSE; /* sleeping in mch_delay() */
 
 #if defined(FEAT_JOB_CHANNEL) && !defined(USE_SYSTEM)
 static int dont_check_job_ended = 0;
@@ -376,7 +348,7 @@ mch_chdir(char *path)
     void
 mch_write(char_u *s, int len)
 {
-    ignored = (int)write(1, (char *)s, len);
+    vim_ignored = (int)write(1, (char *)s, len);
     if (p_wd)		/* Unix is too fast, slow down a bit more */
 	RealWaitForChar(read_cmd_fd, p_wd, NULL, NULL);
 }
@@ -416,10 +388,14 @@ mch_inchar(
 	    handle_resize();
 
 #ifdef MESSAGE_QUEUE
-	parse_queued_messages();
-	/* If input was put directly in typeahead buffer bail out here. */
-	if (typebuf_changed(tb_change_cnt))
-	    return 0;
+	// Only process messages when waiting.
+	if (wtime != 0)
+	{
+	    parse_queued_messages();
+	    // If input was put directly in typeahead buffer bail out here.
+	    if (typebuf_changed(tb_change_cnt))
+		return 0;
+	}
 #endif
 	if (wtime < 0 && did_start_blocking)
 	    /* blocking and already waited for p_ut */
@@ -441,7 +417,7 @@ mch_inchar(
 		    /* no character available within "wtime" */
 		    return 0;
 
-		if (wtime < 0)
+		else
 		{
 		    /* no character available within 'updatetime' */
 		    did_start_blocking = TRUE;
@@ -603,7 +579,7 @@ mch_total_mem(int special UNUSED)
 #  ifdef MAC_OS_X_VERSION_10_9
 					    + vm_stat.compressor_page_count
 #  endif
-					    ) * getpagesize();
+					    ) * sysconf(_SC_PAGESIZE);
 	mach_port_deallocate(mach_task_self(), host);
     }
 # endif
@@ -804,7 +780,6 @@ mch_delay(long msec, int ignoreinput)
  * Return a pointer to an item on the stack.  Used to find out if the stack
  * grows up or down.
  */
-static void check_stack_growth(char *p);
 static int stack_grows_downwards;
 
 /*
@@ -922,7 +897,6 @@ static stack_t sigstk;			/* for sigaltstack() */
 static struct sigstack sigstk;		/* for sigstack() */
 # endif
 
-static void init_signal_stack(void);
 static char *signal_stack;
 
     static void
@@ -1227,18 +1201,39 @@ deathtrap SIGDEFARG(sigarg)
     SIGRETURN;
 }
 
-#if defined(_REENTRANT) && defined(SIGCONT)
 /*
- * On Solaris with multi-threading, suspending might not work immediately.
- * Catch the SIGCONT signal, which will be used as an indication whether the
- * suspending has been done or not.
+ * Invoked after receiving SIGCONT.  We don't know what happened while
+ * sleeping, deal with part of that.
+ */
+    static void
+after_sigcont(void)
+{
+# ifdef FEAT_TITLE
+    // Don't change "oldtitle" in a signal handler, set a flag to obtain it
+    // again later.
+    oldtitle_outdated = TRUE;
+# endif
+    settmode(TMODE_RAW);
+    need_check_timestamps = TRUE;
+    did_check_timestamps = FALSE;
+}
+
+#if defined(SIGCONT)
+static RETSIGTYPE sigcont_handler SIGPROTOARG;
+static volatile sig_atomic_t in_mch_suspend = FALSE;
+
+/*
+ * With multi-threading, suspending might not work immediately.  Catch the
+ * SIGCONT signal, which will be used as an indication whether the suspending
+ * has been done or not.
  *
  * On Linux, signal is not always handled immediately either.
  * See https://bugs.launchpad.net/bugs/291373
+ * Probably because the signal is handled in another thread.
  *
  * volatile because it is used in signal handler sigcont_handler().
  */
-static volatile int sigcont_received;
+static volatile sig_atomic_t sigcont_received;
 static RETSIGTYPE sigcont_handler SIGPROTOARG;
 
 /*
@@ -1247,17 +1242,28 @@ static RETSIGTYPE sigcont_handler SIGPROTOARG;
     static RETSIGTYPE
 sigcont_handler SIGDEFARG(sigarg)
 {
-    sigcont_received = TRUE;
+    if (in_mch_suspend)
+    {
+	sigcont_received = TRUE;
+    }
+    else
+    {
+	// We didn't suspend ourselves, assume we were stopped by a SIGSTOP
+	// signal (which can't be intercepted) and get a SIGCONT.  Need to get
+	// back to a sane mode. We should redraw, but we can't really do that
+	// in a signal handler, do a redraw later.
+	after_sigcont();
+	redraw_later(CLEAR);
+	cursor_on_force();
+	out_flush();
+    }
+
     SIGRETURN;
 }
 #endif
 
-# if defined(FEAT_CLIPBOARD) && defined(FEAT_X11)
-static void loose_clipboard(void);
+#if defined(FEAT_CLIPBOARD) && defined(FEAT_X11)
 # ifdef USE_SYSTEM
-static void save_clipboard(void);
-static void restore_clipboard(void);
-
 static void *clip_star_save = NULL;
 static void *clip_plus_save = NULL;
 # endif
@@ -1330,6 +1336,8 @@ mch_suspend(void)
 {
     /* BeOS does have SIGTSTP, but it doesn't work. */
 #if defined(SIGTSTP) && !defined(__BEOS__)
+    in_mch_suspend = TRUE;
+
     out_flush();	    /* needed to make cursor visible on some systems */
     settmode(TMODE_COOK);
     out_flush();	    /* needed to disable mouse on some systems */
@@ -1337,40 +1345,32 @@ mch_suspend(void)
 # if defined(FEAT_CLIPBOARD) && defined(FEAT_X11)
     loose_clipboard();
 # endif
-
-# if defined(_REENTRANT) && defined(SIGCONT)
+# if defined(SIGCONT)
     sigcont_received = FALSE;
 # endif
+
     kill(0, SIGTSTP);	    /* send ourselves a STOP signal */
-# if defined(_REENTRANT) && defined(SIGCONT)
+
+# if defined(SIGCONT)
     /*
      * Wait for the SIGCONT signal to be handled. It generally happens
-     * immediately, but somehow not all the time. Do not call pause()
-     * because there would be race condition which would hang Vim if
-     * signal happened in between the test of sigcont_received and the
-     * call to pause(). If signal is not yet received, call sleep(0)
-     * to just yield CPU. Signal should then be received. If somehow
-     * it's still not received, sleep 1, 2, 3 ms. Don't bother waiting
-     * further if signal is not received after 1+2+3+4 ms (not expected
-     * to happen).
+     * immediately, but somehow not all the time, probably because it's handled
+     * in another thread. Do not call pause() because there would be race
+     * condition which would hang Vim if signal happened in between the test of
+     * sigcont_received and the call to pause(). If signal is not yet received,
+     * sleep 0, 1, 2, 3 ms. Don't bother waiting further if signal is not
+     * received after 1+2+3 ms (not expected to happen).
      */
     {
 	long wait_time;
+
 	for (wait_time = 0; !sigcont_received && wait_time <= 3L; wait_time++)
-	    /* Loop is not entered most of the time */
 	    mch_delay(wait_time, FALSE);
     }
 # endif
+    in_mch_suspend = FALSE;
 
-# ifdef FEAT_TITLE
-    /*
-     * Set oldtitle to NULL, so the current title is obtained again.
-     */
-    VIM_CLEAR(oldtitle);
-# endif
-    settmode(TMODE_RAW);
-    need_check_timestamps = TRUE;
-    did_check_timestamps = FALSE;
+    after_sigcont();
 #else
     suspend_shell();
 #endif
@@ -1410,7 +1410,7 @@ set_signals(void)
 #ifdef SIGTSTP
     signal(SIGTSTP, restricted ? SIG_IGN : SIG_DFL);
 #endif
-#if defined(_REENTRANT) && defined(SIGCONT)
+#if defined(SIGCONT)
     signal(SIGCONT, sigcont_handler);
 #endif
 
@@ -1469,7 +1469,7 @@ catch_int_signal(void)
 reset_signals(void)
 {
     catch_signals(SIG_DFL, SIG_DFL);
-#if defined(_REENTRANT) && defined(SIGCONT)
+#if defined(SIGCONT)
     /* SIGCONT isn't in the list, because its default action is ignore */
     signal(SIGCONT, SIG_DFL);
 #endif
@@ -1532,7 +1532,7 @@ block_signals(sigset_t *set)
     for (i = 0; signal_info[i].sig != -1; i++)
 	sigaddset(&newset, signal_info[i].sig);
 
-# if defined(_REENTRANT) && defined(SIGCONT)
+# if defined(SIGCONT)
     /* SIGCONT isn't in the list, because its default action is ignore */
     sigaddset(&newset, SIGCONT);
 # endif
@@ -1629,10 +1629,6 @@ xopen_message(long elapsed_msec)
 /*
  * A few functions shared by X11 title and clipboard code.
  */
-static int x_error_handler(Display *dpy, XErrorEvent *error_event);
-static int x_error_check(Display *dpy, XErrorEvent *error_event);
-static int x_connect_to_server(void);
-static int test_x11_window(Display *dpy);
 
 static int	got_x_error = FALSE;
 
@@ -1668,8 +1664,6 @@ x_error_check(Display *dpy UNUSED, XErrorEvent *error_event UNUSED)
 /*
  * An X IO Error handler, used to catch error while opening the display.
  */
-static int x_IOerror_check(Display *dpy);
-
     static int
 x_IOerror_check(Display *dpy UNUSED)
 {
@@ -1684,8 +1678,6 @@ x_IOerror_check(Display *dpy UNUSED)
 /*
  * An X IO Error handler, used to catch terminal errors.
  */
-static int x_IOerror_handler(Display *dpy);
-static void may_restore_clipboard(void);
 static int xterm_dpy_was_reset = FALSE;
 
     static int
@@ -2239,6 +2231,11 @@ mch_settitle(char_u *title, char_u *icon)
      */
     if ((type || *T_TS != NUL) && title != NULL)
     {
+	if (oldtitle_outdated)
+	{
+	    oldtitle_outdated = FALSE;
+	    VIM_CLEAR(oldtitle);
+	}
 	if (oldtitle == NULL
 #ifdef FEAT_GUI
 		&& !gui.in_use
@@ -2294,17 +2291,21 @@ mch_settitle(char_u *title, char_u *icon)
 /*
  * Restore the window/icon title.
  * "which" is one of:
- *  1  only restore title
- *  2  only restore icon
- *  3  restore title and icon
+ *  SAVE_RESTORE_TITLE only restore title
+ *  SAVE_RESTORE_ICON  only restore icon
+ *  SAVE_RESTORE_BOTH  restore title and icon
  */
     void
 mch_restore_title(int which)
 {
     /* only restore the title or icon when it has been set */
-    mch_settitle(((which & 1) && did_set_title) ?
+    mch_settitle(((which & SAVE_RESTORE_TITLE) && did_set_title) ?
 			(oldtitle ? oldtitle : p_titleold) : NULL,
-			      ((which & 2) && did_set_icon) ? oldicon : NULL);
+	       ((which & SAVE_RESTORE_ICON) && did_set_icon) ? oldicon : NULL);
+
+    // pop and push from/to the stack
+    term_pop_title(which);
+    term_push_title(which);
 }
 
 #endif /* FEAT_TITLE */
@@ -2486,8 +2487,6 @@ mch_get_pid(void)
 }
 
 #if !defined(HAVE_STRERROR) && defined(USE_GETCWD)
-static char *strerror(int);
-
     static char *
 strerror(int err)
 {
@@ -3092,11 +3091,7 @@ mch_isdir(char_u *name)
 	return FALSE;
     if (stat((char *)name, &statb))
 	return FALSE;
-#ifdef _POSIX_SOURCE
     return (S_ISDIR(statb.st_mode) ? TRUE : FALSE);
-#else
-    return ((statb.st_mode & S_IFMT) == S_IFDIR ? TRUE : FALSE);
-#endif
 }
 
 /*
@@ -3113,14 +3108,8 @@ mch_isrealdir(char_u *name)
 	return FALSE;
     if (mch_lstat((char *)name, &statb))
 	return FALSE;
-#ifdef _POSIX_SOURCE
     return (S_ISDIR(statb.st_mode) ? TRUE : FALSE);
-#else
-    return ((statb.st_mode & S_IFMT) == S_IFDIR ? TRUE : FALSE);
-#endif
 }
-
-static int executable_file(char_u *name);
 
 /*
  * Return 1 if "name" is an executable file, 0 if not or it doesn't exist.
@@ -3324,8 +3313,6 @@ mch_free_mem(void)
 }
 #endif
 
-static void exit_scroll(void);
-
 /*
  * Output a newline when exiting.
  * Make sure the newline goes to the same stream as the text.
@@ -3370,7 +3357,9 @@ mch_exit(int r)
     {
 	settmode(TMODE_COOK);
 #ifdef FEAT_TITLE
-	mch_restore_title(3);	/* restore xterm title and icon name */
+	// restore xterm title and icon name
+	mch_restore_title(SAVE_RESTORE_BOTH);
+	term_pop_title(SAVE_RESTORE_BOTH);
 #endif
 	/*
 	 * When t_ti is not empty but it doesn't cause swapping terminal
@@ -3629,6 +3618,13 @@ mch_setmouse(int on)
     static int	bevalterm_ison = FALSE;
 # endif
     int		xterm_mouse_vers;
+
+# if defined(FEAT_X11) && defined(FEAT_XCLIPBOARD)
+    if (!on)
+	// Make sure not tracing mouse movements.  Important when a button-down
+	// was received but no release yet.
+	stop_xterm_trace();
+# endif
 
     if (on == mouse_ison
 # ifdef FEAT_BEVAL_TERM
@@ -4154,94 +4150,16 @@ wait4pid(pid_t child, waitstatus *status)
     return wait_pid;
 }
 
-#if defined(FEAT_JOB_CHANNEL) || !defined(USE_SYSTEM) || defined(PROTO)
-/*
- * Parse "cmd" and put the white-separated parts in "argv".
- * "argv" is an allocated array with "argc" entries.
- * Returns FAIL when out of memory.
- */
-    int
-mch_parse_cmd(char_u *cmd, int use_shcf, char ***argv, int *argc)
-{
-    int		i;
-    char_u	*p, *d;
-    int		inquote;
-
-    /*
-     * Do this loop twice:
-     * 1: find number of arguments
-     * 2: separate them and build argv[]
-     */
-    for (i = 0; i < 2; ++i)
-    {
-	p = skipwhite(cmd);
-	inquote = FALSE;
-	*argc = 0;
-	for (;;)
-	{
-	    if (i == 1)
-		(*argv)[*argc] = (char *)p;
-	    ++*argc;
-	    d = p;
-	    while (*p != NUL && (inquote || (*p != ' ' && *p != TAB)))
-	    {
-		if (p[0] == '"')
-		    /* quotes surrounding an argument and are dropped */
-		    inquote = !inquote;
-		else
-		{
-		    if (p[0] == '\\' && p[1] != NUL)
-		    {
-			/* First pass: skip over "\ " and "\"".
-			 * Second pass: Remove the backslash. */
-			++p;
-		    }
-		    if (i == 1)
-			*d++ = *p;
-		}
-		++p;
-	    }
-	    if (*p == NUL)
-	    {
-		if (i == 1)
-		    *d++ = NUL;
-		break;
-	    }
-	    if (i == 1)
-		*d++ = NUL;
-	    p = skipwhite(p + 1);
-	}
-	if (*argv == NULL)
-	{
-	    if (use_shcf)
-	    {
-		/* Account for possible multiple args in p_shcf. */
-		p = p_shcf;
-		for (;;)
-		{
-		    p = skiptowhite(p);
-		    if (*p == NUL)
-			break;
-		    ++*argc;
-		    p = skipwhite(p);
-		}
-	    }
-
-	    *argv = (char **)alloc((unsigned)((*argc + 4) * sizeof(char *)));
-	    if (*argv == NULL)	    /* out of memory */
-		return FAIL;
-	}
-    }
-    return OK;
-}
-#endif
-
 #if !defined(USE_SYSTEM) || defined(FEAT_JOB_CHANNEL)
 /*
  * Set the environment for a child process.
  */
     static void
-set_child_environment(long rows, long columns, char *term)
+set_child_environment(
+	long	rows,
+	long	columns,
+	char	*term,
+	int	is_terminal UNUSED)
 {
 # ifdef HAVE_SETENV
     char	envbuf[50];
@@ -4251,6 +4169,9 @@ set_child_environment(long rows, long columns, char *term)
     static char	envbuf_Lines[20];
     static char	envbuf_Columns[20];
     static char	envbuf_Colors[20];
+#  ifdef FEAT_TERMINAL
+    static char	envbuf_Version[20];
+#  endif
 #  ifdef FEAT_CLIENTSERVER
     static char	envbuf_Servername[60];
 #  endif
@@ -4271,6 +4192,13 @@ set_child_environment(long rows, long columns, char *term)
     setenv("COLUMNS", (char *)envbuf, 1);
     sprintf((char *)envbuf, "%ld", colors);
     setenv("COLORS", (char *)envbuf, 1);
+#  ifdef FEAT_TERMINAL
+    if (is_terminal)
+    {
+	sprintf((char *)envbuf, "%ld",  (long)get_vim_var_nr(VV_VERSION));
+	setenv("VIM_TERMINAL", (char *)envbuf, 1);
+    }
+#  endif
 #  ifdef FEAT_CLIENTSERVER
     setenv("VIM_SERVERNAME", serverName == NULL ? "" : (char *)serverName, 1);
 #  endif
@@ -4291,6 +4219,14 @@ set_child_environment(long rows, long columns, char *term)
     putenv(envbuf_Columns);
     vim_snprintf(envbuf_Colors, sizeof(envbuf_Colors), "COLORS=%ld", colors);
     putenv(envbuf_Colors);
+#  ifdef FEAT_TERMINAL
+    if (is_terminal)
+    {
+	vim_snprintf(envbuf_Version, sizeof(envbuf_Version),
+			 "VIM_TERMINAL=%ld", (long)get_vim_var_nr(VV_VERSION));
+	putenv(envbuf_Version);
+    }
+#  endif
 #  ifdef FEAT_CLIENTSERVER
     vim_snprintf(envbuf_Servername, sizeof(envbuf_Servername),
 	    "VIM_SERVERNAME=%s", serverName == NULL ? "" : (char *)serverName);
@@ -4300,9 +4236,9 @@ set_child_environment(long rows, long columns, char *term)
 }
 
     static void
-set_default_child_environment(void)
+set_default_child_environment(int is_terminal)
 {
-    set_child_environment(Rows, Columns, "dumb");
+    set_child_environment(Rows, Columns, "dumb", is_terminal);
 }
 #endif
 
@@ -4359,8 +4295,129 @@ may_send_sigint(int c UNUSED, pid_t pid UNUSED, pid_t wpid UNUSED)
 # endif
 }
 
-    int
-mch_call_shell(
+#if !defined(USE_SYSTEM) || (defined(FEAT_GUI) && defined(FEAT_TERMINAL))
+
+    static int
+build_argv(
+	char_u *cmd,
+	char ***argvp,
+	char_u **sh_tofree,
+	char_u **shcf_tofree)
+{
+    char	**argv = NULL;
+    int		argc;
+
+    *sh_tofree = vim_strsave(p_sh);
+    if (*sh_tofree == NULL)		/* out of memory */
+	return FAIL;
+
+    if (mch_parse_cmd(*sh_tofree, TRUE, &argv, &argc) == FAIL)
+	return FAIL;
+    *argvp = argv;
+
+    if (cmd != NULL)
+    {
+	char_u	*s;
+	char_u	*p;
+
+	if (extra_shell_arg != NULL)
+	    argv[argc++] = (char *)extra_shell_arg;
+
+	/* Break 'shellcmdflag' into white separated parts.  This doesn't
+	 * handle quoted strings, they are very unlikely to appear. */
+	*shcf_tofree = alloc((unsigned)STRLEN(p_shcf) + 1);
+	if (*shcf_tofree == NULL)    /* out of memory */
+	    return FAIL;
+	s = *shcf_tofree;
+	p = p_shcf;
+	while (*p != NUL)
+	{
+	    argv[argc++] = (char *)s;
+	    while (*p && *p != ' ' && *p != TAB)
+		*s++ = *p++;
+	    *s++ = NUL;
+	    p = skipwhite(p);
+	}
+
+	argv[argc++] = (char *)cmd;
+    }
+    argv[argc] = NULL;
+    return OK;
+}
+#endif
+
+#if defined(FEAT_GUI) && defined(FEAT_TERMINAL)
+/*
+ * Use a terminal window to run a shell command in.
+ */
+    static int
+mch_call_shell_terminal(
+    char_u	*cmd,
+    int		options UNUSED)	/* SHELL_*, see vim.h */
+{
+    jobopt_T	opt;
+    char	**argv = NULL;
+    char_u	*tofree1 = NULL;
+    char_u	*tofree2 = NULL;
+    int		retval = -1;
+    buf_T	*buf;
+    job_T	*job;
+    aco_save_T	aco;
+    oparg_T	oa;		/* operator arguments */
+
+    if (build_argv(cmd, &argv, &tofree1, &tofree2) == FAIL)
+	goto theend;
+
+    init_job_options(&opt);
+    ch_log(NULL, "starting terminal for system command '%s'", cmd);
+    buf = term_start(NULL, argv, &opt, TERM_START_SYSTEM);
+    if (buf == NULL)
+	goto theend;
+
+    job = term_getjob(buf->b_term);
+    ++job->jv_refcount;
+
+    /* Find a window to make "buf" curbuf. */
+    aucmd_prepbuf(&aco, buf);
+
+    clear_oparg(&oa);
+    while (term_use_loop())
+    {
+	if (oa.op_type == OP_NOP && oa.regname == NUL && !VIsual_active)
+	{
+	    /* If terminal_loop() returns OK we got a key that is handled
+	     * in Normal model. We don't do redrawing anyway. */
+	    if (terminal_loop(TRUE) == OK)
+		normal_cmd(&oa, TRUE);
+	}
+	else
+	    normal_cmd(&oa, TRUE);
+    }
+    retval = job->jv_exitval;
+    ch_log(NULL, "system command finished");
+
+    job_unref(job);
+
+    /* restore curwin/curbuf and a few other things */
+    aucmd_restbuf(&aco);
+
+    wait_return(TRUE);
+    do_buffer(DOBUF_WIPE, DOBUF_FIRST, FORWARD, buf->b_fnum, TRUE);
+
+theend:
+    vim_free(argv);
+    vim_free(tofree1);
+    vim_free(tofree2);
+    return retval;
+}
+#endif
+
+#ifdef USE_SYSTEM
+/*
+ * Use system() to start the shell: simple but slow.
+ */
+    static int
+mch_call_shell_system(
     char_u	*cmd,
     int		options)	/* SHELL_*, see vim.h */
 {
@@ -4369,7 +4426,6 @@ mch_call_shell(
     char	*ofn = NULL;
 #endif
     int		tmode = cur_tmode;
-#ifdef USE_SYSTEM	/* use system() to start the shell: simple but slow */
     char_u	*newcmd;	/* only needed for unix */
     int		x;
 
@@ -4443,14 +4499,23 @@ mch_call_shell(
     restore_clipboard();
 # endif
     return x;
+}
 
-#else /* USE_SYSTEM */	    /* don't use system(), use fork()/exec() */
+#else /* USE_SYSTEM */
 
 # define EXEC_FAILED 122    /* Exit code when shell didn't execute.  Don't use
 			       127, some shells use that already */
 # define OPEN_NULL_FAILED 123 /* Exit code if /dev/null can't be opened */
 
-    char_u	*newcmd;
+/*
+ * Don't use system(), use fork()/exec().
+ */
+    static int
+mch_call_shell_fork(
+    char_u	*cmd,
+    int		options)	/* SHELL_*, see vim.h */
+{
+    int		tmode = cur_tmode;
     pid_t	pid;
     pid_t	wpid = 0;
     pid_t	wait_pid = 0;
@@ -4461,10 +4526,9 @@ mch_call_shell(
 # endif
     int		retval = -1;
     char	**argv = NULL;
-    int		argc;
-    char_u	*p_shcf_copy = NULL;
+    char_u	*tofree1 = NULL;
+    char_u	*tofree2 = NULL;
     int		i;
-    char_u	*p;
     int		pty_master_fd = -1;	    /* for pty's */
 # ifdef FEAT_GUI
     int		pty_slave_fd = -1;
@@ -4474,43 +4538,12 @@ mch_call_shell(
     int		pipe_error = FALSE;
     int		did_settmode = FALSE;	/* settmode(TMODE_RAW) called */
 
-    newcmd = vim_strsave(p_sh);
-    if (newcmd == NULL)		/* out of memory */
-	goto error;
-
     out_flush();
     if (options & SHELL_COOKED)
 	settmode(TMODE_COOK);		/* set to normal mode */
 
-    if (mch_parse_cmd(newcmd, TRUE, &argv, &argc) == FAIL)
+    if (build_argv(cmd, &argv, &tofree1, &tofree2) == FAIL)
 	goto error;
-
-    if (cmd != NULL)
-    {
-	char_u	*s;
-
-	if (extra_shell_arg != NULL)
-	    argv[argc++] = (char *)extra_shell_arg;
-
-	/* Break 'shellcmdflag' into white separated parts.  This doesn't
-	 * handle quoted strings, they are very unlikely to appear. */
-	p_shcf_copy = alloc((unsigned)STRLEN(p_shcf) + 1);
-	if (p_shcf_copy == NULL)    /* out of memory */
-	    goto error;
-	s = p_shcf_copy;
-	p = p_shcf;
-	while (*p != NUL)
-	{
-	    argv[argc++] = (char *)s;
-	    while (*p && *p != ' ' && *p != TAB)
-		*s++ = *p++;
-	    *s++ = NUL;
-	    p = skipwhite(p);
-	}
-
-	argv[argc++] = (char *)cmd;
-    }
-    argv[argc] = NULL;
 
     /*
      * For the GUI, when writing the output into the buffer and when reading
@@ -4631,9 +4664,9 @@ mch_call_shell(
 		 */
 		if (fd >= 0)
 		{
-		    ignored = dup(fd); /* To replace stdin  (fd 0) */
-		    ignored = dup(fd); /* To replace stdout (fd 1) */
-		    ignored = dup(fd); /* To replace stderr (fd 2) */
+		    vim_ignored = dup(fd); /* To replace stdin  (fd 0) */
+		    vim_ignored = dup(fd); /* To replace stdout (fd 1) */
+		    vim_ignored = dup(fd); /* To replace stderr (fd 2) */
 
 		    /* Don't need this now that we've duplicated it */
 		    close(fd);
@@ -4676,7 +4709,7 @@ mch_call_shell(
 #  endif
 		}
 # endif
-		set_default_child_environment();
+		set_default_child_environment(FALSE);
 
 		/*
 		 * stderr is only redirected when using the GUI, so that a
@@ -4690,13 +4723,13 @@ mch_call_shell(
 
 		    /* set up stdin/stdout/stderr for the child */
 		    close(0);
-		    ignored = dup(pty_slave_fd);
+		    vim_ignored = dup(pty_slave_fd);
 		    close(1);
-		    ignored = dup(pty_slave_fd);
+		    vim_ignored = dup(pty_slave_fd);
 		    if (gui.in_use)
 		    {
 			close(2);
-			ignored = dup(pty_slave_fd);
+			vim_ignored = dup(pty_slave_fd);
 		    }
 
 		    close(pty_slave_fd);    /* has been dupped, close it now */
@@ -4707,13 +4740,13 @@ mch_call_shell(
 		    /* set up stdin for the child */
 		    close(fd_toshell[1]);
 		    close(0);
-		    ignored = dup(fd_toshell[0]);
+		    vim_ignored = dup(fd_toshell[0]);
 		    close(fd_toshell[0]);
 
 		    /* set up stdout for the child */
 		    close(fd_fromshell[0]);
 		    close(1);
-		    ignored = dup(fd_fromshell[1]);
+		    vim_ignored = dup(fd_fromshell[1]);
 		    close(fd_fromshell[1]);
 
 # ifdef FEAT_GUI
@@ -4721,7 +4754,7 @@ mch_call_shell(
 		    {
 			/* set up stderr for the child */
 			close(2);
-			ignored = dup(1);
+			vim_ignored = dup(1);
 		    }
 # endif
 		}
@@ -4858,7 +4891,7 @@ mch_call_shell(
 					    && (lnum !=
 						    curbuf->b_ml.ml_line_count
 						    || curbuf->b_p_eol)))
-				    ignored = write(toshell_fd, "\n",
+				    vim_ignored = write(toshell_fd, "\n",
 								   (size_t)1);
 				++lnum;
 				if (lnum > curbuf->b_op_end.lnum)
@@ -5081,6 +5114,7 @@ mch_call_shell(
 			else if (has_mbyte)
 			{
 			    int		l;
+			    char_u	*p;
 
 			    len += buffer_off;
 			    buffer[len] = NUL;
@@ -5319,8 +5353,6 @@ finished:
 		MSG_PUTS(_("\nCommand terminated\n"));
 	}
     }
-    vim_free(argv);
-    vim_free(p_shcf_copy);
 
 error:
     if (!did_settmode)
@@ -5329,16 +5361,33 @@ error:
 # ifdef FEAT_TITLE
     resettitle();
 # endif
-    vim_free(newcmd);
+    vim_free(argv);
+    vim_free(tofree1);
+    vim_free(tofree2);
 
     return retval;
-
+}
 #endif /* USE_SYSTEM */
+
+    int
+mch_call_shell(
+    char_u	*cmd,
+    int		options)	/* SHELL_*, see vim.h */
+{
+#if defined(FEAT_GUI) && defined(FEAT_TERMINAL)
+    if (gui.in_use && vim_strchr(p_go, GO_TERMINAL) != NULL)
+	return mch_call_shell_terminal(cmd, options);
+#endif
+#ifdef USE_SYSTEM
+    return mch_call_shell_system(cmd, options);
+#else
+    return mch_call_shell_fork(cmd, options);
+#endif
 }
 
 #if defined(FEAT_JOB_CHANNEL) || defined(PROTO)
     void
-mch_job_start(char **argv, job_T *job, jobopt_T *options)
+mch_job_start(char **argv, job_T *job, jobopt_T *options, int is_terminal)
 {
     pid_t	pid;
     int		fd_in[2] = {-1, -1};	/* for stdin */
@@ -5471,14 +5520,27 @@ mch_job_start(char **argv, job_T *job, jobopt_T *options)
 
 # ifdef FEAT_TERMINAL
 	if (options->jo_term_rows > 0)
+	{
+	    char *term = (char *)T_NAME;
+
+#ifdef FEAT_GUI
+	    if (term_is_gui(T_NAME))
+		/* In the GUI 'term' is not what we want, use $TERM. */
+		term = getenv("TERM");
+#endif
+	    /* Use 'term' or $TERM if it starts with "xterm", otherwise fall
+	     * back to "xterm". */
+	    if (term == NULL || *term == NUL || STRNCMP(term, "xterm", 5) != 0)
+		term = "xterm";
 	    set_child_environment(
 		    (long)options->jo_term_rows,
 		    (long)options->jo_term_cols,
-		    STRNCMP(T_NAME, "xterm", 5) == 0
-						   ? (char *)T_NAME : "xterm");
+		    term,
+		    is_terminal);
+	}
 	else
 # endif
-	    set_default_child_environment();
+	    set_default_child_environment(is_terminal);
 
 	if (options->jo_env != NULL)
 	{
@@ -5520,34 +5582,34 @@ mch_job_start(char **argv, job_T *job, jobopt_T *options)
 	/* set up stdin for the child */
 	close(0);
 	if (use_null_for_in && null_fd >= 0)
-	    ignored = dup(null_fd);
+	    vim_ignored = dup(null_fd);
 	else if (fd_in[0] < 0)
-	    ignored = dup(pty_slave_fd);
+	    vim_ignored = dup(pty_slave_fd);
 	else
-	    ignored = dup(fd_in[0]);
+	    vim_ignored = dup(fd_in[0]);
 
 	/* set up stderr for the child */
 	close(2);
 	if (use_null_for_err && null_fd >= 0)
 	{
-	    ignored = dup(null_fd);
+	    vim_ignored = dup(null_fd);
 	    stderr_works = FALSE;
 	}
 	else if (use_out_for_err)
-	    ignored = dup(fd_out[1]);
+	    vim_ignored = dup(fd_out[1]);
 	else if (fd_err[1] < 0)
-	    ignored = dup(pty_slave_fd);
+	    vim_ignored = dup(pty_slave_fd);
 	else
-	    ignored = dup(fd_err[1]);
+	    vim_ignored = dup(fd_err[1]);
 
 	/* set up stdout for the child */
 	close(1);
 	if (use_null_for_out && null_fd >= 0)
-	    ignored = dup(null_fd);
+	    vim_ignored = dup(null_fd);
 	else if (fd_out[1] < 0)
-	    ignored = dup(pty_slave_fd);
+	    vim_ignored = dup(pty_slave_fd);
 	else
-	    ignored = dup(fd_out[1]);
+	    vim_ignored = dup(fd_out[1]);
 
 	if (fd_in[0] >= 0)
 	    close(fd_in[0]);
@@ -5603,13 +5665,21 @@ mch_job_start(char **argv, job_T *job, jobopt_T *options)
 	close(fd_err[1]);
     if (channel != NULL)
     {
-	channel_set_pipes(channel,
-		use_file_for_in || use_null_for_in
-			? INVALID_FD : fd_in[1] < 0 ? pty_master_fd : fd_in[1],
-		use_file_for_out || use_null_for_out
-		      ? INVALID_FD : fd_out[0] < 0 ? pty_master_fd : fd_out[0],
-		use_out_for_err || use_file_for_err || use_null_for_err
-		     ? INVALID_FD : fd_err[0] < 0 ? pty_master_fd : fd_err[0]);
+	int in_fd = use_file_for_in || use_null_for_in
+			? INVALID_FD : fd_in[1] < 0 ? pty_master_fd : fd_in[1];
+	int out_fd = use_file_for_out || use_null_for_out
+		      ? INVALID_FD : fd_out[0] < 0 ? pty_master_fd : fd_out[0];
+	/* When using pty_master_fd only set it for stdout, do not duplicate it
+	 * for stderr, it only needs to be read once. */
+	int err_fd = use_out_for_err || use_file_for_err || use_null_for_err
+		      ? INVALID_FD
+		      : fd_err[0] >= 0
+		         ? fd_err[0]
+		         : (out_fd == pty_master_fd
+				 ? INVALID_FD
+				 : pty_master_fd);
+
+	channel_set_pipes(channel, in_fd, out_fd, err_fd);
 	channel_set_job(channel, job, options);
     }
     else
@@ -5665,6 +5735,9 @@ mch_job_status(job_T *job)
     if (wait_pid == -1)
     {
 	/* process must have exited */
+	if (job->jv_status < JOB_ENDED)
+	    ch_log(job->jv_channel, "Job no longer exists: %s",
+							      strerror(errno));
 	goto return_dead;
     }
     if (wait_pid == 0)
@@ -5673,21 +5746,22 @@ mch_job_status(job_T *job)
     {
 	/* LINTED avoid "bitwise operation on signed value" */
 	job->jv_exitval = WEXITSTATUS(status);
+	if (job->jv_status < JOB_ENDED)
+	    ch_log(job->jv_channel, "Job exited with %d", job->jv_exitval);
 	goto return_dead;
     }
     if (WIFSIGNALED(status))
     {
 	job->jv_exitval = -1;
+	if (job->jv_status < JOB_ENDED)
+	    ch_log(job->jv_channel, "Job terminated by a signal");
 	goto return_dead;
     }
     return "run";
 
 return_dead:
     if (job->jv_status < JOB_ENDED)
-    {
-	ch_log(job->jv_channel, "Job ended");
 	job->jv_status = JOB_ENDED;
-    }
     return "dead";
 }
 
@@ -5821,7 +5895,9 @@ mch_create_pty_channel(job_T *job, jobopt_T *options)
     job->jv_channel = channel;  /* ch_refcount was set by add_channel() */
     channel->ch_keep_open = TRUE;
 
-    channel_set_pipes(channel, pty_master_fd, pty_master_fd, pty_master_fd);
+    /* Only set the pty_master_fd for stdout, do not duplicate it for stderr,
+     * it only needs to be read once. */
+    channel_set_pipes(channel, pty_master_fd, pty_master_fd, INVALID_FD);
     channel_set_job(channel, job, options);
     return OK;
 }
@@ -6118,7 +6194,9 @@ RealWaitForChar(int fd, long msec, int *check_for_gpm UNUSED, int *interrupted)
 
 	struct timeval  tv;
 	struct timeval	*tvp;
-	fd_set		rfds, wfds, efds;
+	// These are static because they can take 8 Kbyte each and cause the
+	// signal stack to run out with -O3.
+	static fd_set	rfds, wfds, efds;
 	int		maxfd;
 	long		towait = msec;
 
@@ -6191,7 +6269,8 @@ select_eintr:
 	if (interrupted != NULL)
 	    *interrupted = FALSE;
 
-	ret = select(maxfd + 1, &rfds, &wfds, &efds, tvp);
+	ret = select(maxfd + 1, SELECT_TYPE_ARG234 &rfds,
+		      SELECT_TYPE_ARG234 &wfds, SELECT_TYPE_ARG234 &efds, tvp);
 	result = ret > 0 && FD_ISSET(fd, &rfds);
 	if (result)
 	    --ret;
@@ -7712,16 +7791,8 @@ clip_xterm_set_selection(VimClipboard *cbd)
 /*
  * Code for X Session Management Protocol.
  */
-static void xsmp_handle_save_yourself(SmcConn smc_conn, SmPointer client_data, int save_type, Bool shutdown, int interact_style, Bool fast);
-static void xsmp_die(SmcConn smc_conn, SmPointer client_data);
-static void xsmp_save_complete(SmcConn smc_conn, SmPointer client_data);
-static void xsmp_shutdown_cancelled(SmcConn smc_conn, SmPointer	client_data);
-static void xsmp_ice_connection(IceConn iceConn, IcePointer clientData, Bool opening, IcePointer *watchData);
-
 
 # if defined(FEAT_GUI) && defined(USE_XSMP_INTERACT)
-static void xsmp_handle_interaction(SmcConn smc_conn, SmPointer client_data);
-
 /*
  * This is our chance to ask the user if they want to save,
  * or abort the logout
@@ -7926,7 +7997,7 @@ xsmp_init(void)
 	    &smcallbacks,
 	    NULL,
 	    &xsmp.clientid,
-	    sizeof(errorstring),
+	    sizeof(errorstring) - 1,
 	    errorstring);
     if (xsmp.smcconn == NULL)
     {

@@ -232,7 +232,6 @@ static int eval5(char_u **arg, typval_T *rettv, int evaluate);
 static int eval6(char_u **arg, typval_T *rettv, int evaluate, int want_string);
 static int eval7(char_u **arg, typval_T *rettv, int evaluate, int want_string);
 
-static int eval_index(char_u **arg, typval_T *rettv, int evaluate, int verbose);
 static int get_string_tv(char_u **arg, typval_T *rettv, int evaluate);
 static int get_lit_string_tv(char_u **arg, typval_T *rettv, int evaluate);
 static int free_unref_items(int copyID);
@@ -729,6 +728,7 @@ eval_expr_typval(typval_T *expr, typval_T *argv, int argc, typval_T *rettv)
 	    return FAIL;
 	if (*s != NUL)  /* check for trailing chars after expr */
 	{
+	    clear_tv(rettv);
 	    EMSG2(_(e_invexpr2), s);
 	    return FAIL;
 	}
@@ -859,9 +859,9 @@ eval_to_string_safe(
     int		use_sandbox)
 {
     char_u	*retval;
-    void	*save_funccalp;
+    funccal_entry_T funccal_entry;
 
-    save_funccalp = save_funccal();
+    save_funccal(&funccal_entry);
     if (use_sandbox)
 	++sandbox;
     ++textlock;
@@ -869,7 +869,7 @@ eval_to_string_safe(
     if (use_sandbox)
 	--sandbox;
     --textlock;
-    restore_funccal(save_funccalp);
+    restore_funccal();
     return retval;
 }
 
@@ -1011,80 +1011,24 @@ eval_expr(char_u *arg, char_u **nextcmd)
 
 /*
  * Call some Vim script function and return the result in "*rettv".
- * Uses argv[argc] for the function arguments.  Only Number and String
- * arguments are currently supported.
+ * Uses argv[0] to argv[argc - 1] for the function arguments.  argv[argc]
+ * should have type VAR_UNKNOWN.
  * Returns OK or FAIL.
  */
     int
 call_vim_function(
     char_u      *func,
     int		argc,
-    char_u      **argv,
-    int		safe,		/* use the sandbox */
-    int		str_arg_only,	/* all arguments are strings */
+    typval_T	*argv,
     typval_T	*rettv)
 {
-    typval_T	*argvars;
-    varnumber_T	n;
-    int		len;
-    int		i;
     int		doesrange;
-    void	*save_funccalp = NULL;
     int		ret;
 
-    argvars = (typval_T *)alloc((unsigned)((argc + 1) * sizeof(typval_T)));
-    if (argvars == NULL)
-	return FAIL;
-
-    for (i = 0; i < argc; i++)
-    {
-	/* Pass a NULL or empty argument as an empty string */
-	if (argv[i] == NULL || *argv[i] == NUL)
-	{
-	    argvars[i].v_type = VAR_STRING;
-	    argvars[i].vval.v_string = (char_u *)"";
-	    continue;
-	}
-
-	if (str_arg_only)
-	    len = 0;
-	else
-	{
-	    /* Recognize a number argument, the others must be strings. A dash
-	     * is a string too. */
-	    vim_str2nr(argv[i], NULL, &len, STR2NR_ALL, &n, NULL, 0);
-	    if (len == 1 && *argv[i] == '-')
-		len = 0;
-	}
-	if (len != 0 && len == (int)STRLEN(argv[i]))
-	{
-	    argvars[i].v_type = VAR_NUMBER;
-	    argvars[i].vval.v_number = n;
-	}
-	else
-	{
-	    argvars[i].v_type = VAR_STRING;
-	    argvars[i].vval.v_string = argv[i];
-	}
-    }
-
-    if (safe)
-    {
-	save_funccalp = save_funccal();
-	++sandbox;
-    }
-
     rettv->v_type = VAR_UNKNOWN;		/* clear_tv() uses this */
-    ret = call_func(func, (int)STRLEN(func), rettv, argc, argvars, NULL,
+    ret = call_func(func, (int)STRLEN(func), rettv, argc, argv, NULL,
 		    curwin->w_cursor.lnum, curwin->w_cursor.lnum,
 		    &doesrange, TRUE, NULL, NULL);
-    if (safe)
-    {
-	--sandbox;
-	restore_funccal(save_funccalp);
-    }
-    vim_free(argvars);
-
     if (ret == FAIL)
 	clear_tv(rettv);
 
@@ -1094,20 +1038,19 @@ call_vim_function(
 /*
  * Call Vim script function "func" and return the result as a number.
  * Returns -1 when calling the function fails.
- * Uses argv[argc] for the function arguments.
+ * Uses argv[0] to argv[argc - 1] for the function arguments. argv[argc] should
+ * have type VAR_UNKNOWN.
  */
     varnumber_T
 call_func_retnr(
     char_u      *func,
     int		argc,
-    char_u      **argv,
-    int		safe)		/* use the sandbox */
+    typval_T	*argv)
 {
     typval_T	rettv;
     varnumber_T	retval;
 
-    /* All arguments are passed as strings, no conversion to number. */
-    if (call_vim_function(func, argc, argv, safe, TRUE, &rettv) == FAIL)
+    if (call_vim_function(func, argc, argv, &rettv) == FAIL)
 	return -1;
 
     retval = get_tv_number_chk(&rettv, NULL);
@@ -1122,20 +1065,19 @@ call_func_retnr(
 /*
  * Call Vim script function "func" and return the result as a string.
  * Returns NULL when calling the function fails.
- * Uses argv[argc] for the function arguments.
+ * Uses argv[0] to argv[argc - 1] for the function arguments. argv[argc] should
+ * have type VAR_UNKNOWN.
  */
     void *
 call_func_retstr(
     char_u      *func,
     int		argc,
-    char_u      **argv,
-    int		safe)		/* use the sandbox */
+    typval_T	*argv)
 {
     typval_T	rettv;
     char_u	*retval;
 
-    /* All arguments are passed as strings, no conversion to number. */
-    if (call_vim_function(func, argc, argv, safe, TRUE, &rettv) == FAIL)
+    if (call_vim_function(func, argc, argv, &rettv) == FAIL)
 	return NULL;
 
     retval = vim_strsave(get_tv_string(&rettv));
@@ -1146,20 +1088,19 @@ call_func_retstr(
 
 /*
  * Call Vim script function "func" and return the result as a List.
- * Uses argv[argc] for the function arguments.
+ * Uses argv[0] to argv[argc - 1] for the function arguments. argv[argc] should
+ * have type VAR_UNKNOWN.
  * Returns NULL when there is something wrong.
  */
     void *
 call_func_retlist(
     char_u      *func,
     int		argc,
-    char_u      **argv,
-    int		safe)		/* use the sandbox */
+    typval_T	*argv)
 {
     typval_T	rettv;
 
-    /* All arguments are passed as strings, no conversion to number. */
-    if (call_vim_function(func, argc, argv, safe, TRUE, &rettv) == FAIL)
+    if (call_vim_function(func, argc, argv, &rettv) == FAIL)
 	return NULL;
 
     if (rettv.v_type != VAR_LIST)
@@ -1484,6 +1425,7 @@ list_hashtable_vars(
     hashitem_T	*hi;
     dictitem_T	*di;
     int		todo;
+    char_u	buf[IOSIZE];
 
     todo = (int)ht->ht_used;
     for (hi = ht->ht_array; todo > 0 && !got_int; ++hi)
@@ -1492,6 +1434,13 @@ list_hashtable_vars(
 	{
 	    --todo;
 	    di = HI2DI(hi);
+
+	    // apply :filter /pat/ to variable name
+	    vim_strncpy((char_u *) buf, prefix, IOSIZE - 1);
+	    vim_strcat((char_u *) buf, di->di_key, IOSIZE);
+	    if (message_filtered(buf))
+		continue;
+
 	    if (empty || di->di_tv.v_type != VAR_STRING
 					   || di->di_tv.vval.v_string != NULL)
 		list_one_var(di, prefix, first);
@@ -1553,8 +1502,8 @@ list_vim_vars(int *first)
     static void
 list_script_vars(int *first)
 {
-    if (current_SID > 0 && current_SID <= ga_scripts.ga_len)
-	list_hashtable_vars(&SCRIPT_VARS(current_SID),
+    if (current_sctx.sc_sid > 0 && current_sctx.sc_sid <= ga_scripts.ga_len)
+	list_hashtable_vars(&SCRIPT_VARS(current_sctx.sc_sid),
 						(char_u *)"s:", FALSE, first);
 }
 
@@ -2758,6 +2707,20 @@ ex_unletlock(
 
     do
     {
+	if (*arg == '$')
+	{
+	    char_u    *name = ++arg;
+
+	    if (get_env_len(&arg) == 0)
+	    {
+		EMSG2(_(e_invarg2), name - 1);
+		return;
+	    }
+	    vim_unsetenv(name);
+	    arg = skipwhite(arg);
+	    continue;
+	}
+
 	/* Parse the name and find the end. */
 	name_end = get_lval(arg, NULL, &lv, TRUE, eap->skip || error, 0,
 							     FNE_CHECK_START);
@@ -3093,8 +3056,6 @@ del_menutrans_vars(void)
  * with its prefix. Allocated in cat_prefix_varname(), freed later in
  * get_user_var_name().
  */
-
-static char_u *cat_prefix_varname(int prefix, char_u *name);
 
 static char_u	*varnamebuf = NULL;
 static int	varnamebuflen = 0;
@@ -6462,6 +6423,29 @@ set_vcount(
 }
 
 /*
+ * Save variables that might be changed as a side effect.  Used when executing
+ * a timer callback.
+ */
+    void
+save_vimvars(vimvars_save_T *vvsave)
+{
+    vvsave->vv_prevcount = vimvars[VV_PREVCOUNT].vv_nr;
+    vvsave->vv_count = vimvars[VV_COUNT].vv_nr;
+    vvsave->vv_count1 = vimvars[VV_COUNT1].vv_nr;
+}
+
+/*
+ * Restore variables saved by save_vimvars().
+ */
+    void
+restore_vimvars(vimvars_save_T *vvsave)
+{
+    vimvars[VV_PREVCOUNT].vv_nr = vvsave->vv_prevcount;
+    vimvars[VV_COUNT].vv_nr = vvsave->vv_count;
+    vimvars[VV_COUNT1].vv_nr = vvsave->vv_count1;
+}
+
+/*
  * Set string v: variable to a copy of "val".
  */
     void
@@ -6590,7 +6574,7 @@ set_cmdarg(exarg_T *eap, char_u *oldarg)
 	len += 7;
 
     if (eap->force_ff != 0)
-	len += (unsigned)STRLEN(eap->cmd + eap->force_ff) + 6;
+	len += 10; /* " ++ff=unix" */
 # ifdef FEAT_MBYTE
     if (eap->force_enc != 0)
 	len += (unsigned)STRLEN(eap->cmd + eap->force_enc) + 7;
@@ -6614,7 +6598,9 @@ set_cmdarg(exarg_T *eap, char_u *oldarg)
 
     if (eap->force_ff != 0)
 	sprintf((char *)newval + STRLEN(newval), " ++ff=%s",
-						eap->cmd + eap->force_ff);
+						eap->force_ff == 'u' ? "unix"
+						: eap->force_ff == 'd' ? "dos"
+						: "mac");
 #ifdef FEAT_MBYTE
     if (eap->force_enc != 0)
 	sprintf((char *)newval + STRLEN(newval), " ++enc=%s",
@@ -7103,7 +7089,7 @@ get_tv_string_buf_chk(typval_T *varp, char_u *buf)
     {
 	case VAR_NUMBER:
 	    vim_snprintf((char *)buf, NUMBUFLEN, "%lld",
-					    (varnumber_T)varp->vval.v_number);
+					    (long long)varp->vval.v_number);
 	    return buf;
 	case VAR_FUNC:
 	case VAR_PARTIAL:
@@ -7221,7 +7207,7 @@ find_var_in_ht(
 	/* Must be something like "s:", otherwise "ht" would be NULL. */
 	switch (htname)
 	{
-	    case 's': return &SCRIPT_SV(current_SID)->sv_var;
+	    case 's': return &SCRIPT_SV(current_sctx.sc_sid)->sv_var;
 	    case 'g': return &globvars_var;
 	    case 'v': return &vimvars_var;
 	    case 'b': return &curbuf->b_bufvar;
@@ -7305,8 +7291,8 @@ find_var_ht(char_u *name, char_u **varname)
     if (*name == 'l')				/* l: local function variable */
 	return get_funccal_local_ht();
     if (*name == 's'				/* script variable */
-	    && current_SID > 0 && current_SID <= ga_scripts.ga_len)
-	return &SCRIPT_VARS(current_SID);
+	    && current_sctx.sc_sid > 0 && current_sctx.sc_sid <= ga_scripts.ga_len)
+	return &SCRIPT_VARS(current_sctx.sc_sid);
     return NULL;
 }
 
@@ -7976,6 +7962,7 @@ get_user_input(
 	if (defstr != NULL)
 	{
 	    int save_ex_normal_busy = ex_normal_busy;
+
 	    ex_normal_busy = 0;
 	    rettv->vval.v_string =
 		getcmdline_prompt(secret ? NUL : '@', p, echo_attr,
@@ -8214,9 +8201,7 @@ find_win_by_nr(
     tabpage_T	*tp)	/* NULL for current tab page */
 {
     win_T	*wp;
-    int		nr;
-
-    nr = (int)get_tv_number_chk(vp, NULL);
+    int		nr = (int)get_tv_number_chk(vp, NULL);
 
     if (nr < 0)
 	return NULL;
@@ -8236,6 +8221,20 @@ find_win_by_nr(
     if (nr >= LOWEST_WIN_ID)
 	return NULL;
     return wp;
+}
+
+/*
+ * Find a window: When using a Window ID in any tab page, when using a number
+ * in the current tab page.
+ */
+    win_T *
+find_win_by_nr_or_id(typval_T *vp)
+{
+    int	nr = (int)get_tv_number_chk(vp, NULL);
+
+    if (nr >= LOWEST_WIN_ID)
+	return win_id2wp(vp);
+    return find_win_by_nr(vp, NULL);
 }
 
 /*
@@ -8526,8 +8525,6 @@ typedef enum
     VAR_FLAVOUR_VIMINFO		/* all uppercase */
 } var_flavour_T;
 
-static var_flavour_T var_flavour(char_u *varname);
-
     static var_flavour_T
 var_flavour(char_u *varname)
 {
@@ -8555,7 +8552,7 @@ read_viminfo_varlist(vir_T *virp, int writing)
     char_u	*tab;
     int		type = VAR_NUMBER;
     typval_T	tv;
-    void	*save_funccal;
+    funccal_entry_T funccal_entry;
 
     if (!writing && (find_viminfo_parameter('!') != NULL))
     {
@@ -8604,9 +8601,9 @@ read_viminfo_varlist(vir_T *virp, int writing)
 		}
 
 		/* when in a function use global variables */
-		save_funccal = clear_current_funccal();
+		save_funccal(&funccal_entry);
 		set_var(virp->vir_line + 1, &tv, FALSE);
-		restore_current_funccal(save_funccal);
+		restore_funccal();
 
 		if (tv.v_type == VAR_STRING)
 		    vim_free(tv.vval.v_string);
@@ -8748,20 +8745,25 @@ store_session_globals(FILE *fd)
  * Should only be invoked when 'verbose' is non-zero.
  */
     void
-last_set_msg(scid_T scriptID)
+last_set_msg(sctx_T script_ctx)
 {
     char_u *p;
 
-    if (scriptID != 0)
+    if (script_ctx.sc_sid != 0)
     {
-	p = home_replace_save(NULL, get_scriptname(scriptID));
+	p = home_replace_save(NULL, get_scriptname(script_ctx.sc_sid));
 	if (p != NULL)
 	{
 	    verbose_enter();
 	    MSG_PUTS(_("\n\tLast set from "));
 	    MSG_PUTS(p);
-	    vim_free(p);
+	    if (script_ctx.sc_lnum > 0)
+	    {
+		MSG_PUTS(_(" line "));
+		msg_outnum((long)script_ctx.sc_lnum);
+	    }
 	    verbose_leave();
+	    vim_free(p);
 	}
     }
 }
@@ -8813,7 +8815,7 @@ assert_error(garray_T *gap)
     list_append_string(vimvars[VV_ERRORS].vv_list, gap->ga_data, gap->ga_len);
 }
 
-    void
+    int
 assert_equal_common(typval_T *argvars, assert_type_T atype)
 {
     garray_T	ga;
@@ -8826,10 +8828,12 @@ assert_equal_common(typval_T *argvars, assert_type_T atype)
 								       atype);
 	assert_error(&ga);
 	ga_clear(&ga);
+	return 1;
     }
+    return 0;
 }
 
-    void
+    int
 assert_equalfile(typval_T *argvars)
 {
     char_u	buf1[NUMBUFLEN];
@@ -8841,7 +8845,7 @@ assert_equalfile(typval_T *argvars)
     FILE	*fd2;
 
     if (fname1 == NULL || fname2 == NULL)
-	return;
+	return 0;
 
     IObuff[0] = NUL;
     fd1 = mch_fopen((char *)fname1, READBIN);
@@ -8895,10 +8899,12 @@ assert_equalfile(typval_T *argvars)
 	ga_concat(&ga, IObuff);
 	assert_error(&ga);
 	ga_clear(&ga);
+	return 1;
     }
+    return 0;
 }
 
-    void
+    int
 assert_match_common(typval_T *argvars, assert_type_T atype)
 {
     garray_T	ga;
@@ -8916,10 +8922,12 @@ assert_match_common(typval_T *argvars, assert_type_T atype)
 									atype);
 	assert_error(&ga);
 	ga_clear(&ga);
+	return 1;
     }
+    return 0;
 }
 
-    void
+    int
 assert_inrange(typval_T *argvars)
 {
     garray_T	ga;
@@ -8932,7 +8940,7 @@ assert_inrange(typval_T *argvars)
     char_u	numbuf[NUMBUFLEN];
 
     if (error)
-	return;
+	return 0;
     if (actual < lower || actual > upper)
     {
 	prepare_assert_error(&ga);
@@ -8949,13 +8957,16 @@ assert_inrange(typval_T *argvars)
 	}
 	assert_error(&ga);
 	ga_clear(&ga);
+	return 1;
     }
+    return 0;
 }
 
 /*
  * Common for assert_true() and assert_false().
+ * Return non-zero for failure.
  */
-    void
+    int
 assert_bool(typval_T *argvars, int isTrue)
 {
     int		error = FALSE;
@@ -8963,7 +8974,7 @@ assert_bool(typval_T *argvars, int isTrue)
 
     if (argvars[0].v_type == VAR_SPECIAL
 	    && argvars[0].vval.v_number == (isTrue ? VVAL_TRUE : VVAL_FALSE))
-	return;
+	return 0;
     if (argvars[0].v_type != VAR_NUMBER
 	    || (get_tv_number_chk(&argvars[0], &error) == 0) == isTrue
 	    || error)
@@ -8974,10 +8985,12 @@ assert_bool(typval_T *argvars, int isTrue)
 		NULL, &argvars[0], ASSERT_OTHER);
 	assert_error(&ga);
 	ga_clear(&ga);
+	return 1;
     }
+    return 0;
 }
 
-    void
+    int
 assert_report(typval_T *argvars)
 {
     garray_T	ga;
@@ -8986,9 +8999,10 @@ assert_report(typval_T *argvars)
     ga_concat(&ga, get_tv_string(&argvars[0]));
     assert_error(&ga);
     ga_clear(&ga);
+    return 1;
 }
 
-    void
+    int
 assert_exception(typval_T *argvars)
 {
     garray_T	ga;
@@ -9000,6 +9014,7 @@ assert_exception(typval_T *argvars)
 	ga_concat(&ga, (char_u *)"v:exception is not set");
 	assert_error(&ga);
 	ga_clear(&ga);
+	return 1;
     }
     else if (error != NULL
 	&& strstr((char *)vimvars[VV_EXCEPTION].vv_str, (char *)error) == NULL)
@@ -9009,14 +9024,17 @@ assert_exception(typval_T *argvars)
 				  &vimvars[VV_EXCEPTION].vv_tv, ASSERT_OTHER);
 	assert_error(&ga);
 	ga_clear(&ga);
+	return 1;
     }
+    return 0;
 }
 
-    void
+    int
 assert_beeps(typval_T *argvars)
 {
     char_u	*cmd = get_tv_string_chk(&argvars[0]);
     garray_T	ga;
+    int		ret = 0;
 
     called_vim_beep = FALSE;
     suppress_errthrow = TRUE;
@@ -9029,17 +9047,22 @@ assert_beeps(typval_T *argvars)
 	ga_concat(&ga, cmd);
 	assert_error(&ga);
 	ga_clear(&ga);
+	ret = 1;
     }
 
     suppress_errthrow = FALSE;
     emsg_on_display = FALSE;
+    return ret;
 }
 
-    void
+    int
 assert_fails(typval_T *argvars)
 {
     char_u	*cmd = get_tv_string_chk(&argvars[0]);
     garray_T	ga;
+    int		ret = 0;
+    char_u	numbuf[NUMBUFLEN];
+    char_u	*tofree;
 
     called_emsg = FALSE;
     suppress_errthrow = TRUE;
@@ -9049,9 +9072,17 @@ assert_fails(typval_T *argvars)
     {
 	prepare_assert_error(&ga);
 	ga_concat(&ga, (char_u *)"command did not fail: ");
-	ga_concat(&ga, cmd);
+	if (argvars[1].v_type != VAR_UNKNOWN
+					   && argvars[2].v_type != VAR_UNKNOWN)
+	{
+	    ga_concat(&ga, echo_string(&argvars[2], &tofree, numbuf, 0));
+	    vim_free(tofree);
+	}
+	else
+	    ga_concat(&ga, cmd);
 	assert_error(&ga);
 	ga_clear(&ga);
+	ret = 1;
     }
     else if (argvars[1].v_type != VAR_UNKNOWN)
     {
@@ -9066,6 +9097,7 @@ assert_fails(typval_T *argvars)
 				     &vimvars[VV_ERRMSG].vv_tv, ASSERT_OTHER);
 	    assert_error(&ga);
 	    ga_clear(&ga);
+	ret = 1;
 	}
     }
 
@@ -9074,6 +9106,7 @@ assert_fails(typval_T *argvars)
     emsg_silent = FALSE;
     emsg_on_display = FALSE;
     set_vim_var_string(VV_ERRMSG, NULL, 0);
+    return ret;
 }
 
 /*
@@ -9367,8 +9400,7 @@ typval_compare(
 }
 
     char_u *
-typval_tostring(arg)
-    typval_T	*arg;
+typval_tostring(typval_T *arg)
 {
     char_u	*tofree;
     char_u	numbuf[NUMBUFLEN];
@@ -9424,9 +9456,6 @@ var_exists(char_u *var)
 /*
  * Functions for ":8" filename modifier: get 8.3 version of a filename.
  */
-static int get_short_pathname(char_u **fnamep, char_u **bufp, int *fnamelen);
-static int shortpath_for_invalid_fname(char_u **fname, char_u **bufp, int *fnamelen);
-static int shortpath_for_partial(char_u **fnamep, char_u **bufp, int *fnamelen);
 
 /*
  * Get the short path (8.3) for the filename in "fnamep".
@@ -9671,11 +9700,12 @@ shortpath_for_partial(
  */
     int
 modify_fname(
-    char_u	*src,		/* string with modifiers */
-    int		*usedlen,	/* characters after src that are used */
-    char_u	**fnamep,	/* file name so far */
-    char_u	**bufp,		/* buffer for allocated file name or NULL */
-    int		*fnamelen)	/* length of fnamep */
+    char_u	*src,		// string with modifiers
+    int		tilde_file,	// "~" is a file name, not $HOME
+    int		*usedlen,	// characters after src that are used
+    char_u	**fnamep,	// file name so far
+    char_u	**bufp,		// buffer for allocated file name or NULL
+    int		*fnamelen)	// length of fnamep
 {
     int		valid = 0;
     char_u	*tail;
@@ -9705,8 +9735,8 @@ repeat:
 		    || (*fnamep)[1] == '\\'
 # endif
 		    || (*fnamep)[1] == NUL)
-
 #endif
+		&& !(tilde_file && (*fnamep)[1] == NUL)
 	   )
 	{
 	    *fnamep = expand_env_save(*fnamep);

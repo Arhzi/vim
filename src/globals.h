@@ -325,8 +325,8 @@ EXTERN int	may_garbage_collect INIT(= FALSE);
 EXTERN int	want_garbage_collect INIT(= FALSE);
 EXTERN int	garbage_collect_at_exit INIT(= FALSE);
 
-/* ID of script being sourced or was sourced to define the current function. */
-EXTERN scid_T	current_SID INIT(= 0);
+// Script CTX being sourced or was sourced to define the current function.
+EXTERN sctx_T	current_sctx INIT(= {0 COMMA 0 COMMA 0});
 #endif
 
 EXTERN int	did_source_packages INIT(= FALSE);
@@ -345,9 +345,13 @@ EXTERN int	t_colors INIT(= 0);	    /* int value of T_CCO */
  * a match within one line), search_match_endcol the column number of the
  * character just after the match in the last line.
  */
-EXTERN int	highlight_match INIT(= FALSE);	/* show search match pos */
-EXTERN linenr_T	search_match_lines;		/* lines of of matched string */
-EXTERN colnr_T	search_match_endcol;		/* col nr of match end */
+EXTERN int	highlight_match INIT(= FALSE);	// show search match pos
+EXTERN linenr_T	search_match_lines;		// lines of of matched string
+EXTERN colnr_T	search_match_endcol;		// col nr of match end
+#ifdef FEAT_SEARCH_EXTRA
+EXTERN linenr_T	search_first_line INIT(= 0);	  // for :{FIRST},{last}s/pat
+EXTERN linenr_T	search_last_line INIT(= MAXLNUM); // for :{first},{LAST}s/pat
+#endif
 
 EXTERN int	no_smartcase INIT(= FALSE);	/* don't use 'smartcase' once */
 
@@ -370,6 +374,11 @@ EXTERN int	highlight_stlterm[9];		/* On top of user */
 EXTERN int	highlight_stltermnc[9];		/* On top of user */
 #  endif
 # endif
+#endif
+#ifdef FEAT_TERMINAL
+		// When TRUE skip calling terminal_loop() once.  Used when
+		// typing ':' at the more prompt.
+EXTERN int	skip_term_loop INIT(= FALSE);
 #endif
 #ifdef FEAT_GUI
 EXTERN char_u	*use_gvimrc INIT(= NULL);	/* "-U" cmdline argument */
@@ -509,7 +518,7 @@ EXTERN char	*foreground_argument INIT(= NULL);
  *
  * volatile because it is used in signal handler sig_sysmouse().
  */
-EXTERN volatile int hold_gui_events INIT(= 0);
+EXTERN volatile sig_atomic_t hold_gui_events INIT(= 0);
 
 /*
  * When resizing the shell is postponed, remember the new size, and call
@@ -646,7 +655,7 @@ EXTERN int	entered_free_all_mem INIT(= FALSE);
 				/* TRUE when in or after free_all_mem() */
 #endif
 /* volatile because it is used in signal handler deathtrap(). */
-EXTERN volatile int full_screen INIT(= FALSE);
+EXTERN volatile sig_atomic_t full_screen INIT(= FALSE);
 				/* TRUE when doing full-screen output
 				 * otherwise only writing some messages */
 
@@ -669,8 +678,7 @@ EXTERN int	allbuf_lock INIT(= 0);
 				 * changed, no buffer can be deleted and
 				 * current directory can't be changed.
 				 * Used for SwapExists et al. */
-#ifdef FEAT_EVAL
-# define HAVE_SANDBOX
+#ifdef HAVE_SANDBOX
 EXTERN int	sandbox INIT(= 0);
 				/* Non-zero when evaluating an expression in a
 				 * "sandbox".  Several things are not allowed
@@ -773,13 +781,11 @@ EXTERN pos_T	Insstart;		/* This is where the latest
  * op_insert(), to detect correctly where inserting by the user started. */
 EXTERN pos_T	Insstart_orig;
 
-#ifdef FEAT_VREPLACE
 /*
  * Stuff for VREPLACE mode.
  */
 EXTERN int	orig_line_count INIT(= 0);  /* Line count when "gR" started */
 EXTERN int	vr_lines_changed INIT(= 0); /* #Lines changed by "gR" so far */
-#endif
 
 #if defined(FEAT_X11) && defined(FEAT_XCLIPBOARD)
 /* argument to SETJMP() for handling X IO errors */
@@ -794,11 +800,11 @@ EXTERN JMP_BUF x_jump_env;
 EXTERN JMP_BUF lc_jump_env;	/* argument to SETJMP() */
 # ifdef SIGHASARG
 /* volatile because it is used in signal handlers. */
-EXTERN volatile int lc_signal;	/* caught signal number, 0 when no was signal
+EXTERN volatile sig_atomic_t lc_signal;	/* caught signal number, 0 when no was signal
 				   caught; used for mch_libcall() */
 # endif
 /* volatile because it is used in signal handler deathtrap(). */
-EXTERN volatile int lc_active INIT(= FALSE); /* TRUE when lc_jump_env is valid. */
+EXTERN volatile sig_atomic_t lc_active INIT(= FALSE); /* TRUE when lc_jump_env is valid. */
 #endif
 
 #if defined(FEAT_MBYTE) || defined(FEAT_POSTSCRIPT)
@@ -933,8 +939,8 @@ EXTERN long	opcount INIT(= 0);	/* count for pending operator */
 EXTERN int exmode_active INIT(= 0);	/* zero, EXMODE_NORMAL or EXMODE_VIM */
 EXTERN int ex_no_reprint INIT(= FALSE); /* no need to print after z or p */
 
-EXTERN int Recording INIT(= FALSE);	/* TRUE when recording into a reg. */
-EXTERN int Exec_reg INIT(= FALSE);	/* TRUE when executing a register */
+EXTERN int reg_recording INIT(= 0);	/* register for recording  or zero */
+EXTERN int reg_executing INIT(= 0);	/* register being executed or zero */
 
 EXTERN int no_mapping INIT(= FALSE);	/* currently no mapping allowed */
 EXTERN int no_zero_mapping INIT(= 0);	/* mapping zero not allowed */
@@ -1031,7 +1037,7 @@ EXTERN FILE	*scriptout  INIT(= NULL);   /* stream to write script to */
 EXTERN int	read_cmd_fd INIT(= 0);	    /* fd to read commands from */
 
 /* volatile because it is used in signal handler catch_sigint(). */
-EXTERN volatile int got_int INIT(= FALSE);    /* set to TRUE when interrupt
+EXTERN volatile sig_atomic_t got_int INIT(= FALSE); /* set to TRUE when interrupt
 						signal occurred */
 #ifdef USE_TERM_CONSOLE
 EXTERN int	term_console INIT(= FALSE); /* set to TRUE when console used */
@@ -1126,12 +1132,12 @@ EXTERN char_u	tolower_tab[256];	/* table for tolower() */
 EXTERN char	breakat_flags[256];	/* which characters are in 'breakat' */
 #endif
 
-/* these are in version.c */
+/* These are in version.c, call init_longVersion() before use. */
 extern char *Version;
 #if defined(HAVE_DATE_TIME) && defined(VMS) && defined(VAXC)
 extern char longVersion[];
 #else
-extern char *longVersion;
+EXTERN char *longVersion;
 #endif
 
 /*
@@ -1615,8 +1621,8 @@ EXTERN FILE *time_fd INIT(= NULL);  /* where to write startup timing */
  * can't do anything useful with the value.  Assign to this variable to avoid
  * the warning.
  */
-EXTERN int ignored;
-EXTERN char *ignoredp;
+EXTERN int vim_ignored;
+EXTERN char *vim_ignoredp;
 
 #ifdef FEAT_EVAL
 /* set by alloc_fail(): ID */
@@ -1627,8 +1633,10 @@ EXTERN int  alloc_fail_countdown INIT(= -1);
 EXTERN int  alloc_fail_repeat INIT(= 0);
 
 /* flags set by test_override() */
-EXTERN int  disable_char_avail_for_testing INIT(= 0);
-EXTERN int  disable_redraw_for_testing INIT(= 0);
+EXTERN int  disable_char_avail_for_testing INIT(= FALSE);
+EXTERN int  disable_redraw_for_testing INIT(= FALSE);
+EXTERN int  ignore_redraw_flag_for_testing INIT(= FALSE);
+EXTERN int  nfa_fail_for_testing INIT(= FALSE);
 
 EXTERN int  in_free_unref_items INIT(= FALSE);
 #endif

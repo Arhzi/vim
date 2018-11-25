@@ -1,5 +1,6 @@
 /* dict.c */
 dict_T *dict_alloc(void);
+dict_T *dict_alloc_id(alloc_id_T id);
 dict_T *dict_alloc_lock(int lock);
 int rettv_dict_alloc(typval_T *rettv);
 void rettv_dict_set(typval_T *rettv, dict_T *d);
@@ -12,7 +13,8 @@ void dictitem_remove(dict_T *dict, dictitem_T *item);
 void dictitem_free(dictitem_T *item);
 dict_T *dict_copy(dict_T *orig, int deep, int copyID);
 int dict_add(dict_T *d, dictitem_T *item);
-int dict_add_nr_str(dict_T *d, char *key, varnumber_T nr, char_u *str);
+int dict_add_number(dict_T *d, char *key, varnumber_T nr);
+int dict_add_string(dict_T *d, char *key, char_u *str);
 int dict_add_list(dict_T *d, char *key, list_T *list);
 int dict_add_dict(dict_T *d, char *key, dict_T *dict);
 long dict_len(dict_T *d);

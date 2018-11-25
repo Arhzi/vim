@@ -21,6 +21,7 @@ void adjust_cursor_col(void);
 int leftcol_changed(void);
 void vim_mem_profile_dump(void);
 char_u *alloc(unsigned size);
+int alloc_does_fail(long_u size);
 char_u *alloc_id(unsigned size, alloc_id_T id);
 char_u *alloc_clear(unsigned size);
 char_u *alloc_check(unsigned size);
@@ -110,4 +111,7 @@ int put_time(FILE *fd, time_T the_time);
 void time_to_bytes(time_T the_time, char_u *buf);
 int has_non_ascii(char_u *s);
 void parse_queued_messages(void);
+int mch_parse_cmd(char_u *cmd, int use_shcf, char ***argv, int *argc);
+int build_argv_from_string(char_u *cmd, char ***argv, int *argc);
+int build_argv_from_list(list_T *l, char ***argv, int *argc);
 /* vim: set ft=c : */

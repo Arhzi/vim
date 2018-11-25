@@ -214,6 +214,7 @@
 #define SHM_ALL		"rmfixlnwaWtToOsAIcqF" /* all possible flags for 'shm' */
 
 /* characters for p_go: */
+#define GO_TERMINAL	'!'		/* use terminal for system commands */
 #define GO_ASEL		'a'		/* autoselect */
 #define GO_ASELML	'A'		/* autoselect modeless selection */
 #define GO_BOT		'b'		/* use bottom scrollbar */
@@ -236,7 +237,7 @@
 #define GO_FOOTER	'F'		/* add footer */
 #define GO_VERTICAL	'v'		/* arrange dialog buttons vertically */
 #define GO_KEEPWINSIZE	'k'		/* keep GUI window size */
-#define GO_ALL		"aAbcefFghilmMprtTvk" /* all possible flags for 'go' */
+#define GO_ALL		"!aAbcefFghilmMprtTvk" /* all possible flags for 'go' */
 
 /* flags for 'comments' option */
 #define COM_NEST	'n'		/* comments strings nest */
@@ -1110,6 +1111,13 @@ enum
     , BV_UDF
     , BV_UL
     , BV_WM
+#ifdef FEAT_TERMINAL
+    , BV_TWSL
+#endif
+#ifdef FEAT_VARTABS
+    , BV_VSTS
+    , BV_VTS
+#endif
     , BV_COUNT	    /* must be the last one */
 };
 
@@ -1129,8 +1137,8 @@ enum
     , WV_COLE
 #endif
 #ifdef FEAT_TERMINAL
-    , WV_TK
-    , WV_TMS
+    , WV_TWK
+    , WV_TWS
 #endif
     , WV_CRBIND
 #ifdef FEAT_LINEBREAK
