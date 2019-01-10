@@ -922,9 +922,9 @@ func Run_pipe_through_sort(all, use_buffer)
     let options.in_bot = 4
   endif
   let g:job = job_start('sort', options)
-  call assert_equal("run", job_status(g:job))
 
   if !a:use_buffer
+    call assert_equal("run", job_status(g:job))
     call ch_sendraw(g:job, "ccc\naaa\nddd\nbbb\neee\n")
     call ch_close_in(g:job)
   endif
@@ -1645,6 +1645,27 @@ func Test_collapse_buffers()
   bwipe!
 endfunc
 
+func Test_write_to_deleted_buffer()
+  if !executable('echo') || !has('job')
+    return
+  endif
+  let job = job_start('echo hello', {'out_io': 'buffer', 'out_name': 'test_buffer', 'out_msg': 0})
+  let bufnr = bufnr('test_buffer')
+  call WaitForAssert({-> assert_equal(['hello'], getbufline(bufnr, 1, '$'))})
+  call assert_equal('nofile', getbufvar(bufnr, '&buftype'))
+  call assert_equal('hide', getbufvar(bufnr, '&bufhidden'))
+
+  bdel test_buffer
+  call assert_equal([], getbufline(bufnr, 1, '$'))
+
+  let job = job_start('echo hello', {'out_io': 'buffer', 'out_name': 'test_buffer', 'out_msg': 0})
+  call WaitForAssert({-> assert_equal(['hello'], getbufline(bufnr, 1, '$'))})
+  call assert_equal('nofile', getbufvar(bufnr, '&buftype'))
+  call assert_equal('hide', getbufvar(bufnr, '&bufhidden'))
+
+  bwipe! test_buffer
+endfunc
+
 func Test_cmd_parsing()
   if !has('unix')
     return
@@ -1871,4 +1892,41 @@ func Test_keep_pty_open()
   let elapsed = WaitFor({-> job_status(job) ==# 'dead'})
   call assert_inrange(200, 1000, elapsed)
   call job_stop(job)
+endfunc
+
+func Test_job_start_in_timer()
+  if !has('job') || !has('timers')
+    return
+  endif
+
+  func OutCb(chan, msg)
+  endfunc
+
+  func ExitCb(job, status)
+    let g:val = 1
+    call Resume()
+  endfunc
+
+  func TimerCb(timer)
+    if has('win32')
+      let cmd = ['cmd', '/c', 'echo.']
+    else
+      let cmd = ['echo']
+    endif
+    let g:job = job_start(cmd, {'out_cb': 'OutCb', 'exit_cb': 'ExitCb'})
+    call substitute(repeat('a', 100000), '.', '', 'g')
+  endfunc
+
+  " We should be interrupted before 'updatetime' elapsed.
+  let g:val = 0
+  call timer_start(1, 'TimerCb')
+  let elapsed = Standby(&ut)
+  call assert_inrange(1, &ut / 2, elapsed)
+  call job_stop(g:job)
+
+  delfunc OutCb
+  delfunc ExitCb
+  delfunc TimerCb
+  unlet! g:val
+  unlet! g:job
 endfunc

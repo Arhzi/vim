@@ -411,24 +411,29 @@ set_indent(
     }
     mch_memmove(s, p, (size_t)line_len);
 
-    /* Replace the line (unless undo fails). */
+    // Replace the line (unless undo fails).
     if (!(flags & SIN_UNDO) || u_savesub(curwin->w_cursor.lnum) == OK)
     {
 	ml_replace(curwin->w_cursor.lnum, newline, FALSE);
 	if (flags & SIN_CHANGED)
 	    changed_bytes(curwin->w_cursor.lnum, 0);
-	/* Correct saved cursor position if it is in this line. */
+
+	// Correct saved cursor position if it is in this line.
 	if (saved_cursor.lnum == curwin->w_cursor.lnum)
 	{
 	    if (saved_cursor.col >= (colnr_T)(p - oldline))
-		/* cursor was after the indent, adjust for the number of
-		 * bytes added/removed */
+		// cursor was after the indent, adjust for the number of
+		// bytes added/removed
 		saved_cursor.col += ind_len - (colnr_T)(p - oldline);
 	    else if (saved_cursor.col >= (colnr_T)(s - newline))
-		/* cursor was in the indent, and is now after it, put it back
-		 * at the start of the indent (replacing spaces with TAB) */
+		// cursor was in the indent, and is now after it, put it back
+		// at the start of the indent (replacing spaces with TAB)
 		saved_cursor.col = (colnr_T)(s - newline);
 	}
+#ifdef FEAT_TEXT_PROP
+	adjust_prop_columns(curwin->w_cursor.lnum, (colnr_T)(p - oldline),
+					     ind_len - (colnr_T)(p - oldline));
+#endif
 	retval = TRUE;
     }
     else
@@ -1705,7 +1710,7 @@ open_line(
 		if (flags & OPENLINE_MARKFIX)
 		    mark_col_adjust(curwin->w_cursor.lnum,
 					 curwin->w_cursor.col + less_cols_off,
-							1L, (long)-less_cols);
+						      1L, (long)-less_cols, 0);
 	    }
 	    else
 		changed_bytes(curwin->w_cursor.lnum, curwin->w_cursor.col);
@@ -2018,7 +2023,7 @@ get_last_leader_offset(char_u *line, char_u **flags)
 	    {
 		if (i == 0 || !VIM_ISWHITE(line[i - 1]))
 		    continue;
-		while (VIM_ISWHITE(string[0]))
+		while (VIM_ISWHITE(*string))
 		    ++string;
 	    }
 	    for (j = 0; string[j] != NUL && string[j] == line[i + j]; ++j)
@@ -2032,8 +2037,19 @@ get_last_leader_offset(char_u *line, char_u **flags)
 	     */
 	    if (vim_strchr(part_buf, COM_BLANK) != NULL
 		    && !VIM_ISWHITE(line[i + j]) && line[i + j] != NUL)
-	    {
 		continue;
+
+	    if (vim_strchr(part_buf, COM_MIDDLE) != NULL)
+	    {
+		// For a middlepart comment, only consider it to match if
+		// everything before the current position in the line is
+		// whitespace.  Otherwise we would think we are inside a
+		// comment if the middle part appears somewhere in the middle
+		// of the line.  E.g. for C the "*" appears often.
+		for (j = 0; VIM_ISWHITE(line[j]) && j <= i; j++)
+		    ;
+		if (j < i)
+		    continue;
 	    }
 
 	    /*
@@ -2311,7 +2327,7 @@ ins_bytes_len(char_u *p, int len)
 	for (i = 0; i < len; i += n)
 	{
 	    if (enc_utf8)
-		/* avoid reading past p[len] */
+		// avoid reading past p[len]
 		n = utfc_ptr2len_len(p + i, len - i);
 	    else
 		n = (*mb_ptr2len)(p + i);
@@ -2354,12 +2370,12 @@ ins_char(int c)
 ins_char_bytes(char_u *buf, int charlen)
 {
     int		c = buf[0];
-    int		newlen;		/* nr of bytes inserted */
-    int		oldlen;		/* nr of bytes deleted (0 when not replacing) */
+    int		newlen;		// nr of bytes inserted
+    int		oldlen;		// nr of bytes deleted (0 when not replacing)
     char_u	*p;
     char_u	*newp;
     char_u	*oldp;
-    int		linelen;	/* length of old line including NUL */
+    int		linelen;	// length of old line including NUL
     colnr_T	col;
     linenr_T	lnum = curwin->w_cursor.lnum;
     int		i;
@@ -2428,8 +2444,7 @@ ins_char_bytes(char_u *buf, int charlen)
 	    }
 	    curwin->w_p_list = old_list;
 	}
-	else
-	    if (oldp[col] != NUL)
+	else if (oldp[col] != NUL)
 	{
 	    /* normal replace */
 #ifdef FEAT_MBYTE
@@ -2483,11 +2498,11 @@ ins_char_bytes(char_u *buf, int charlen)
     while (i < newlen)
 	p[i++] = ' ';
 
-    /* Replace the line in the buffer. */
+    // Replace the line in the buffer.
     ml_replace(lnum, newp, FALSE);
 
-    /* mark the buffer as changed and prepare for displaying */
-    changed_bytes(lnum, col);
+    // mark the buffer as changed and prepare for displaying
+    inserted_bytes(lnum, col, newlen - oldlen);
 
     /*
      * If we're in Insert or Replace mode and 'showmatch' is set, then briefly
@@ -2555,7 +2570,7 @@ ins_str(char_u *s)
     mch_memmove(newp + col, s, (size_t)newlen);
     mch_memmove(newp + col + newlen, oldp + col, (size_t)(oldlen - col + 1));
     ml_replace(lnum, newp, FALSE);
-    changed_bytes(lnum, col);
+    inserted_bytes(lnum, col, newlen);
     curwin->w_cursor.col += newlen;
 }
 
@@ -2620,9 +2635,10 @@ del_bytes(
 {
     char_u	*oldp, *newp;
     colnr_T	oldlen;
+    colnr_T	newlen;
     linenr_T	lnum = curwin->w_cursor.lnum;
     colnr_T	col = curwin->w_cursor.col;
-    int		was_alloced;
+    int		alloc_newp;
     long	movelen;
     int		fixpos = fixpos_arg;
 
@@ -2699,6 +2715,7 @@ del_bytes(
 	count = oldlen - col;
 	movelen = 1;
     }
+    newlen = oldlen - count;
 
     /*
      * If the old line has been allocated the deletion can be done in the
@@ -2709,25 +2726,35 @@ del_bytes(
      */
 #ifdef FEAT_NETBEANS_INTG
     if (netbeans_active())
-	was_alloced = FALSE;
+	alloc_newp = TRUE;
     else
 #endif
-	was_alloced = ml_line_alloced();    /* check if oldp was allocated */
-    if (was_alloced)
-	newp = oldp;			    /* use same allocated memory */
+	alloc_newp = !ml_line_alloced();    // check if oldp was allocated
+    if (!alloc_newp)
+	newp = oldp;			    // use same allocated memory
     else
-    {					    /* need to allocate a new line */
-	newp = alloc((unsigned)(oldlen + 1 - count));
+    {					    // need to allocate a new line
+	newp = alloc((unsigned)(newlen + 1));
 	if (newp == NULL)
 	    return FAIL;
 	mch_memmove(newp, oldp, (size_t)col);
     }
     mch_memmove(newp + col, oldp + col + count, (size_t)movelen);
-    if (!was_alloced)
+    if (alloc_newp)
 	ml_replace(lnum, newp, FALSE);
+#ifdef FEAT_TEXT_PROP
+    else
+    {
+	// Also move any following text properties.
+	if (oldlen + 1 < curbuf->b_ml.ml_line_len)
+	    mch_memmove(newp + newlen + 1, oldp + oldlen + 1,
+			       (size_t)curbuf->b_ml.ml_line_len - oldlen - 1);
+	curbuf->b_ml.ml_line_len -= count;
+    }
+#endif
 
-    /* mark the buffer as changed and prepare for displaying */
-    changed_bytes(lnum, curwin->w_cursor.col);
+    // mark the buffer as changed and prepare for displaying
+    inserted_bytes(lnum, curwin->w_cursor.col, -count);
 
     return OK;
 }
@@ -2990,6 +3017,21 @@ changed_bytes(linenr_T lnum, colnr_T col)
 		    changedOneline(wp->w_buffer, wlnum);
 	    }
     }
+#endif
+}
+
+/*
+ * Like changed_bytes() but also adjust text properties for "added" bytes.
+ * When "added" is negative text was deleted.
+ */
+    void
+inserted_bytes(linenr_T lnum, colnr_T col, int added)
+{
+    changed_bytes(lnum, col);
+
+#ifdef FEAT_TEXT_PROP
+    if (curbuf->b_has_textprop && added != 0)
+	adjust_prop_columns(lnum, col, added);
 #endif
 }
 
@@ -4901,7 +4943,7 @@ home_replace(
 	homedir_env = NULL;
 
 #if defined(FEAT_MODIFY_FNAME) || defined(FEAT_EVAL)
-    if (homedir_env != NULL && vim_strchr(homedir_env, '~') != NULL)
+    if (homedir_env != NULL && *homedir_env == '~')
     {
 	int	usedlen = 0;
 	int	flen;
