@@ -47,6 +47,9 @@
 /* Work around for using MSVC and ActivePerl 5.18. */
 #ifdef _MSC_VER
 # define __inline__ __inline
+
+// Work around for using MSVC and Strawberry Perl 5.30.
+# define __builtin_expect(expr, val) (expr)
 #endif
 
 #ifdef __GNUC__
@@ -100,7 +103,7 @@
 
 // Work around for ActivePerl 5.20.3+: Avoid generating (g)vim.lib.
 #if defined(ACTIVEPERL_VERSION) && (ACTIVEPERL_VERSION >= 2003) \
-	&& defined(WIN32) && defined(USE_DYNAMIC_LOADING)
+	&& defined(MSWIN) && defined(USE_DYNAMIC_LOADING)
 # undef XS_EXTERNAL
 # define XS_EXTERNAL(name) XSPROTO(name)
 #endif
@@ -154,7 +157,7 @@ EXTERN_C void boot_DynaLoader(pTHX_ CV*);
 #if defined(DYNAMIC_PERL) || defined(PROTO)
 
 # ifndef DYNAMIC_PERL /* just generating prototypes */
-#  ifdef WIN3264
+#  ifdef MSWIN
 typedef int HANDLE;
 #  endif
 typedef int XSINIT_t;
@@ -164,7 +167,7 @@ typedef int XSUBADDR_t;
 typedef int perl_key;
 # endif
 
-# ifndef WIN3264
+# ifndef MSWIN
 #  include <dlfcn.h>
 #  define HANDLE void*
 #  define PERL_PROC void*
@@ -192,7 +195,9 @@ typedef int perl_key;
 #  define Perl_croak_xs_usage dll_Perl_croak_xs_usage
 # endif
 # ifndef PROTO
-#  define Perl_croak_nocontext dll_Perl_croak_nocontext
+#  ifdef PERL_IMPLICIT_CONTEXT
+#   define Perl_croak_nocontext dll_Perl_croak_nocontext
+#  endif
 #  define Perl_call_argv dll_Perl_call_argv
 #  define Perl_call_pv dll_Perl_call_pv
 #  define Perl_eval_sv dll_Perl_eval_sv
@@ -236,6 +241,7 @@ typedef int perl_key;
 # else
 #  define Perl_sv_2pv dll_Perl_sv_2pv
 # endif
+# define Perl_sv_2pvbyte dll_Perl_sv_2pvbyte
 # define Perl_sv_bless dll_Perl_sv_bless
 # if (PERL_REVISION == 5) && (PERL_VERSION >= 8)
 #  define Perl_sv_catpvn_flags dll_Perl_sv_catpvn_flags
@@ -341,7 +347,9 @@ static void (*Perl_croak_xs_usage)(pTHX_ const CV *const, const char *const para
 						    __attribute__noreturn__;
 #  endif
 # endif
+# ifdef PERL_IMPLICIT_CONTEXT
 static void (*Perl_croak_nocontext)(const char*, ...) __attribute__noreturn__;
+# endif
 static I32 (*Perl_dowantarray)(pTHX);
 static void (*Perl_free_tmps)(pTHX);
 static HV* (*Perl_gv_stashpv)(pTHX_ const char*, I32);
@@ -388,6 +396,7 @@ static char* (*Perl_sv_2pv_nolen)(pTHX_ SV*);
 # else
 static char* (*Perl_sv_2pv)(pTHX_ SV*, STRLEN*);
 # endif
+static char* (*Perl_sv_2pvbyte)(pTHX_ SV*, STRLEN*);
 static SV* (*Perl_sv_bless)(pTHX_ SV*, HV*);
 # if (PERL_REVISION == 5) && (PERL_VERSION >= 8)
 static void (*Perl_sv_catpvn_flags)(pTHX_ SV* , const char*, STRLEN, I32);
@@ -543,6 +552,7 @@ static struct {
 # else
     {"Perl_sv_2pv", (PERL_PROC*)&Perl_sv_2pv},
 # endif
+    {"Perl_sv_2pvbyte", (PERL_PROC*)&Perl_sv_2pvbyte},
 # ifdef PERL589_OR_LATER
     {"Perl_sv_2iv_flags", (PERL_PROC*)&Perl_sv_2iv_flags},
     {"Perl_newXS_flags", (PERL_PROC*)&Perl_newXS_flags},
@@ -692,7 +702,7 @@ perl_runtime_link_init(char *libname, int verbose)
     if ((hPerlLib = load_dll(libname)) == NULL)
     {
 	if (verbose)
-	    EMSG2(_("E370: Could not load library %s"), libname);
+	    semsg(_("E370: Could not load library %s"), libname);
 	return FAIL;
     }
     for (i = 0; perl_funcname_table[i].ptr; ++i)
@@ -703,7 +713,7 @@ perl_runtime_link_init(char *libname, int verbose)
 	    close_dll(hPerlLib);
 	    hPerlLib = NULL;
 	    if (verbose)
-		EMSG2(_(e_loadfunc), perl_funcname_table[i].name);
+		semsg((const char *)_(e_loadfunc), perl_funcname_table[i].name);
 	    return FAIL;
 	}
     }
@@ -756,7 +766,7 @@ perl_init(void)
 }
 
 /*
- * perl_end(): clean up after ourselves
+ * Clean up after ourselves.
  */
     void
 perl_end(void)
@@ -771,13 +781,6 @@ perl_end(void)
 	Perl_sys_term();
 #endif
     }
-#ifdef DYNAMIC_PERL
-    if (hPerlLib)
-    {
-	close_dll(hPerlLib);
-	hPerlLib = NULL;
-    }
-#endif
 }
 
 /*
@@ -795,11 +798,11 @@ msg_split(
     while ((next = strchr(token, '\n')) && !got_int)
     {
 	*next++ = '\0';			/* replace \n with \0 */
-	msg_attr((char_u *)token, attr);
+	msg_attr(token, attr);
 	token = next;
     }
     if (*token && !got_int)
-	msg_attr((char_u *)token, attr);
+	msg_attr(token, attr);
 }
 
 #ifndef FEAT_EVAL
@@ -924,7 +927,7 @@ I32 cur_val(IV iv, SV *sv)
 
     if (SvRV(sv) != SvRV(rv))
 	// XXX: This magic variable is a bit confusing...
-	// Is curently refcounted ?
+	// Is currently refcounted ?
 	sv_setsv(sv, rv);
 
     SvREFCNT_dec(rv);
@@ -968,6 +971,7 @@ VIM_init(void)
 #ifdef DYNAMIC_PERL
 static char *e_noperl = N_("Sorry, this command is disabled: the Perl library could not be loaded.");
 #endif
+static char *e_perlsandbox = N_("E299: Perl evaluation forbidden in sandbox without the Safe module");
 
 /*
  * ":perl"
@@ -995,7 +999,7 @@ ex_perl(exarg_T *eap)
 #ifdef DYNAMIC_PERL
 	if (!perl_enabled(TRUE))
 	{
-	    EMSG(_(e_noperl));
+	    emsg(_(e_noperl));
 	    vim_free(script);
 	    return;
 	}
@@ -1016,13 +1020,12 @@ ex_perl(exarg_T *eap)
 	vim_free(script);
     }
 
-#ifdef HAVE_SANDBOX
-    if (sandbox)
+    if (sandbox || secure)
     {
 	safe = perl_get_sv("VIM::safe", FALSE);
 # ifndef MAKE_TEST  /* avoid a warning for unreachable code */
 	if (safe == NULL || !SvTRUE(safe))
-	    EMSG(_("E299: Perl evaluation forbidden in sandbox without the Safe module"));
+	    emsg(_(e_perlsandbox));
 	else
 # endif
 	{
@@ -1034,7 +1037,6 @@ ex_perl(exarg_T *eap)
 	}
     }
     else
-#endif
 	perl_eval_sv(sv, G_DISCARD | G_NOARGS);
 
     SvREFCNT_dec(sv);
@@ -1065,7 +1067,7 @@ replace_line(linenr_T *line, linenr_T *end)
     }
     else
     {
-	ml_delete(*line, FALSE);
+	ml_delete(*line);
 	deleted_lines_mark(*line, 1L);
 	--(*end);
 	--(*line);
@@ -1232,7 +1234,7 @@ perl_to_vim(SV *sv, typval_T *rettv)
 		    key = hv_iterkey(entry, &key_len);
 
 		    if (!key || !key_len || strlen(key) < (size_t)key_len) {
-			EMSG2("Malformed key Dictionary '%s'", key && *key ? key : "(empty)");
+			semsg("Malformed key Dictionary '%s'", key && *key ? key : "(empty)");
 			break;
 		    }
 
@@ -1283,7 +1285,7 @@ do_perleval(char_u *str, typval_T *rettv)
 #ifdef DYNAMIC_PERL
 	if (!perl_enabled(TRUE))
 	{
-	    EMSG(_(e_noperl));
+	    emsg(_(e_noperl));
 	    return;
 	}
 #endif
@@ -1295,13 +1297,12 @@ do_perleval(char_u *str, typval_T *rettv)
 	ENTER;
 	SAVETMPS;
 
-#ifdef HAVE_SANDBOX
-	if (sandbox)
+	if (sandbox || secure)
 	{
 	    safe = get_sv("VIM::safe", FALSE);
 # ifndef MAKE_TEST  /* avoid a warning for unreachable code */
 	    if (safe == NULL || !SvTRUE(safe))
-		EMSG(_("E299: Perl evaluation forbidden in sandbox without the Safe module"));
+		emsg(_(e_perlsandbox));
 	    else
 # endif
 	    {
@@ -1317,7 +1318,6 @@ do_perleval(char_u *str, typval_T *rettv)
 	    }
 	}
 	else
-#endif /* HAVE_SANDBOX */
 	    sv = eval_pv((char *)str, 0);
 
 	if (sv) {
@@ -1353,7 +1353,7 @@ ex_perldo(exarg_T *eap)
 #ifdef DYNAMIC_PERL
 	if (!perl_enabled(TRUE))
 	{
-	    EMSG(_(e_noperl));
+	    emsg(_(e_noperl));
 	    return;
 	}
 #endif
@@ -1435,7 +1435,7 @@ PerlIOVim_write(pTHX_ PerlIO *f, const void *vbuf, Size_t count)
     char_u *str;
     PerlIOVim * s = PerlIOSelf(f, PerlIOVim);
 
-    str = vim_strnsave((char_u *)vbuf, (int)count);
+    str = vim_strnsave((char_u *)vbuf, count);
     if (str == NULL)
 	return 0;
     msg_split((char_u *)str, s->attr);
@@ -1555,6 +1555,27 @@ Eval(str)
 	    XPUSHs(sv_2mortal(newSVpv((char *)value, 0)));
 	    vim_free(value);
 	}
+
+SV*
+Blob(SV* sv)
+    PREINIT:
+    STRLEN	len;
+    char	*s;
+    unsigned	i;
+    char	buf[3];
+    SV*		newsv;
+
+    CODE:
+    s = SvPVbyte(sv, len);
+    newsv = newSVpv("0z", 2);
+    for (i = 0; i < len; i++)
+    {
+	sprintf(buf, "%02X", (unsigned char)(s[i]));
+	sv_catpvn(newsv, buf, 2);
+    }
+    RETVAL = newsv;
+    OUTPUT:
+    RETVAL
 
 void
 Buffers(...)
@@ -1841,7 +1862,7 @@ Delete(vimbuf, ...)
 
 		    if (u_savedel(lnum, 1) == OK)
 		    {
-			ml_delete(lnum, 0);
+			ml_delete(lnum);
 			check_cursor();
 			deleted_lines_mark(lnum, 1L);
 		    }

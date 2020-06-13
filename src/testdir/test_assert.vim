@@ -3,8 +3,13 @@
 func Test_assert_false()
   call assert_equal(0, assert_false(0))
   call assert_equal(0, assert_false(v:false))
+  call assert_equal(0, v:false->assert_false())
 
   call assert_equal(1, assert_false(123))
+  call assert_match("Expected False but got 123", v:errors[0])
+  call remove(v:errors, 0)
+
+  call assert_equal(1, 123->assert_false())
   call assert_match("Expected False but got 123", v:errors[0])
   call remove(v:errors, 0)
 endfunc
@@ -13,8 +18,13 @@ func Test_assert_true()
   call assert_equal(0, assert_true(1))
   call assert_equal(0, assert_true(123))
   call assert_equal(0, assert_true(v:true))
+  call assert_equal(0, v:true->assert_true())
 
   call assert_equal(1, assert_true(0))
+  call assert_match("Expected True but got 0", v:errors[0])
+  call remove(v:errors, 0)
+
+  call assert_equal(1, 0->assert_true())
   call assert_match("Expected True but got 0", v:errors[0])
   call remove(v:errors, 0)
 endfunc
@@ -26,10 +36,37 @@ func Test_assert_equal()
   call assert_equal(0, assert_equal(4, n))
   let l = [1, 2, 3]
   call assert_equal(0, assert_equal([1, 2, 3], l))
+  call assert_equal(test_null_list(), test_null_list())
+  call assert_equal(test_null_list(), [])
+  call assert_equal([], test_null_list())
 
   let s = 'foo'
   call assert_equal(1, assert_equal('bar', s))
   call assert_match("Expected 'bar' but got 'foo'", v:errors[0])
+  call remove(v:errors, 0)
+
+  call assert_equal('XxxxxxxxxxxxxxxxxxxxxxX', 'XyyyyyyyyyyyyyyyyyyyyyyyyyX')
+  call assert_match("Expected 'X\\\\\\[x occurs 21 times]X' but got 'X\\\\\\[y occurs 25 times]X'", v:errors[0])
+  call remove(v:errors, 0)
+endfunc
+
+func Test_assert_equal_dict()
+  call assert_equal(0, assert_equal(#{one: 1, two: 2}, #{two: 2, one: 1}))
+
+  call assert_equal(1, assert_equal(#{one: 1, two: 2}, #{two: 2, one: 3}))
+  call assert_match("Expected {'one': 1} but got {'one': 3} - 1 equal item omitted", v:errors[0])
+  call remove(v:errors, 0)
+
+  call assert_equal(1, assert_equal(#{one: 1, two: 2}, #{two: 22, one: 11}))
+  call assert_match("Expected {'one': 1, 'two': 2} but got {'one': 11, 'two': 22}", v:errors[0])
+  call remove(v:errors, 0)
+
+  call assert_equal(1, assert_equal(#{}, #{two: 2, one: 1}))
+  call assert_match("Expected {} but got {'one': 1, 'two': 2}", v:errors[0])
+  call remove(v:errors, 0)
+
+  call assert_equal(1, assert_equal(#{two: 2, one: 1}, #{}))
+  call assert_match("Expected {'one': 1, 'two': 2} but got {}", v:errors[0])
   call remove(v:errors, 0)
 endfunc
 
@@ -40,7 +77,7 @@ func Test_assert_equalfile()
 
   let goodtext = ["one", "two", "three"]
   call writefile(goodtext, 'Xone')
-  call assert_equal(1, assert_equalfile('Xone', 'xyzxyz'))
+  call assert_equal(1, 'Xone'->assert_equalfile('xyzxyz'))
   call assert_match("E485: Can't read file xyzxyz", v:errors[0])
   call remove(v:errors, 0)
 
@@ -61,7 +98,18 @@ func Test_assert_equalfile()
   call writefile(['1234X89'], 'Xone')
   call writefile(['1234Y89'], 'Xtwo')
   call assert_equal(1, assert_equalfile('Xone', 'Xtwo'))
-  call assert_match("difference at byte 4", v:errors[0])
+  call assert_match('difference at byte 4, line 1 after "1234X" vs "1234Y"', v:errors[0])
+  call remove(v:errors, 0)
+
+  call writefile([repeat('x', 234) .. 'X'], 'Xone')
+  call writefile([repeat('x', 234) .. 'Y'], 'Xtwo')
+  call assert_equal(1, assert_equalfile('Xone', 'Xtwo'))
+  let xes = repeat('x', 134)
+  call assert_match('difference at byte 234, line 1 after "' .. xes .. 'X" vs "' .. xes .. 'Y"', v:errors[0])
+  call remove(v:errors, 0)
+
+  call assert_equal(1, assert_equalfile('Xone', 'Xtwo', 'a message'))
+  call assert_match("a message: difference at byte 234, line 1 after", v:errors[0])
   call remove(v:errors, 0)
 
   call delete('Xone')
@@ -82,6 +130,9 @@ endfunc
 func Test_assert_report()
   call assert_equal(1, assert_report('something is wrong'))
   call assert_match('something is wrong', v:errors[0])
+  call remove(v:errors, 0)
+  call assert_equal(1, 'also wrong'->assert_report())
+  call assert_match('also wrong', v:errors[0])
   call remove(v:errors, 0)
 endfunc
 
@@ -137,6 +188,10 @@ func Test_match()
   call assert_equal(1, assert_match('bar.*foo', 'foobar', 'wrong'))
   call assert_match('wrong', v:errors[0])
   call remove(v:errors, 0)
+
+  call assert_equal(1, 'foobar'->assert_match('bar.*foo', 'wrong'))
+  call assert_match('wrong', v:errors[0])
+  call remove(v:errors, 0)
 endfunc
 
 func Test_notmatch()
@@ -144,6 +199,10 @@ func Test_notmatch()
   call assert_equal(0, assert_notmatch('^foobar$', 'foobars'))
 
   call assert_equal(1, assert_notmatch('foo', 'foobar'))
+  call assert_match("Pattern 'foo' does match 'foobar'", v:errors[0])
+  call remove(v:errors, 0)
+
+  call assert_equal(1, 'foobar'->assert_notmatch('foo'))
   call assert_match("Pattern 'foo' does match 'foobar'", v:errors[0])
   call remove(v:errors, 0)
 endfunc
@@ -160,6 +219,16 @@ func Test_assert_fail_fails()
   call assert_equal(1, assert_fails('echo', '', 'echo command'))
   call assert_match("command did not fail: echo command", v:errors[0])
   call remove(v:errors, 0)
+
+  call assert_equal(1, 'echo'->assert_fails('', 'echo command'))
+  call assert_match("command did not fail: echo command", v:errors[0])
+  call remove(v:errors, 0)
+endfunc
+
+func Test_assert_fails_in_try_block()
+  try
+    call assert_equal(0, assert_fails('throw "error"'))
+  endtry
 endfunc
 
 func Test_assert_beeps()
@@ -169,6 +238,12 @@ func Test_assert_beeps()
   call assert_equal(1, assert_beeps('normal 0'))
   call assert_match("command did not beep: normal 0", v:errors[0])
   call remove(v:errors, 0)
+
+  call assert_equal(0, 'normal h'->assert_beeps())
+  call assert_equal(1, 'normal 0'->assert_beeps())
+  call assert_match("command did not beep: normal 0", v:errors[0])
+  call remove(v:errors, 0)
+
   bwipe
 endfunc
 
@@ -185,7 +260,29 @@ func Test_assert_inrange()
   call assert_match("Expected range 5 - 7, but got 8", v:errors[0])
   call remove(v:errors, 0)
 
+  call assert_equal(0, 5->assert_inrange(5, 7))
+  call assert_equal(0, 7->assert_inrange(5, 7))
+  call assert_equal(1, 8->assert_inrange(5, 7))
+  call assert_match("Expected range 5 - 7, but got 8", v:errors[0])
+  call remove(v:errors, 0)
+
   call assert_fails('call assert_inrange(1, 1)', 'E119:')
+
+  if has('float')
+    call assert_equal(0, assert_inrange(7.0, 7, 7))
+    call assert_equal(0, assert_inrange(7, 7.0, 7))
+    call assert_equal(0, assert_inrange(7, 7, 7.0))
+    call assert_equal(0, assert_inrange(5, 7, 5.0))
+    call assert_equal(0, assert_inrange(5, 7, 6.0))
+    call assert_equal(0, assert_inrange(5, 7, 7.0))
+
+    call assert_equal(1, assert_inrange(5, 7, 4.0))
+    call assert_match("Expected range 5.0 - 7.0, but got 4.0", v:errors[0])
+    call remove(v:errors, 0)
+    call assert_equal(1, assert_inrange(5, 7, 8.0))
+    call assert_match("Expected range 5.0 - 7.0, but got 8.0", v:errors[0])
+    call remove(v:errors, 0)
+  endif
 endfunc
 
 func Test_assert_with_msg()
@@ -196,10 +293,29 @@ endfunc
 
 func Test_override()
   call test_override('char_avail', 1)
-  call test_override('redraw', 1)
+  eval 1->test_override('redraw')
   call test_override('ALL', 0)
   call assert_fails("call test_override('xxx', 1)", 'E475')
   call assert_fails("call test_override('redraw', 'yes')", 'E474')
+endfunc
+
+func Test_mouse_position()
+  let save_mouse = &mouse
+  set mouse=a
+  new
+  call setline(1, ['line one', 'line two'])
+  call assert_equal([0, 1, 1, 0], getpos('.'))
+  call test_setmouse(1, 5)
+  call feedkeys("\<LeftMouse>", "xt")
+  call assert_equal([0, 1, 5, 0], getpos('.'))
+  call test_setmouse(2, 20)
+  call feedkeys("\<LeftMouse>", "xt")
+  call assert_equal([0, 2, 8, 0], getpos('.'))
+  call test_setmouse(5, 1)
+  call feedkeys("\<LeftMouse>", "xt")
+  call assert_equal([0, 2, 1, 0], getpos('.'))
+  bwipe!
+  let &mouse = save_mouse
 endfunc
 
 func Test_user_is_happy()
