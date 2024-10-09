@@ -196,6 +196,184 @@ func Test_text_format()
   enew!
 endfunc
 
+func Test_format_c_comment()
+  new
+  setl ai cindent tw=40 et fo=croql
+  let text =<< trim END
+      var = 2345;  // asdf asdf asdf asdf asdf asdf asdf asdf asdf asdf
+  END
+  call setline(1, text)
+  normal gql
+  let expected =<< trim END
+      var = 2345;  // asdf asdf asdf asdf asdf
+                   // asdf asdf asdf asdf asdf
+  END
+  call assert_equal(expected, getline(1, '$'))
+
+  %del
+  let text =<< trim END
+      var = 2345;  // asdf asdf asdf asdf asdf asdf asdf asdf asdf asdf asdf asdf
+  END
+  call setline(1, text)
+  normal gql
+  let expected =<< trim END
+      var = 2345;  // asdf asdf asdf asdf asdf
+                   // asdf asdf asdf asdf asdf
+                   // asdf asdf
+  END
+  call assert_equal(expected, getline(1, '$'))
+
+  %del
+  let text =<< trim END
+      #if 0           // This is another long end of
+                      // line comment that
+                      // wraps.
+  END
+  call setline(1, text)
+  normal gq2j
+  let expected =<< trim END
+      #if 0           // This is another long
+                      // end of line comment
+                      // that wraps.
+  END
+  call assert_equal(expected, getline(1, '$'))
+
+  " Using either "o" or "O" repeats a line comment occupying a whole line.
+  %del
+  let text =<< trim END
+      nop;
+      // This is a comment
+      val = val;
+  END
+  call setline(1, text)
+  normal 2Go
+  let expected =<< trim END
+      nop;
+      // This is a comment
+      //
+      val = val;
+  END
+  call assert_equal(expected, getline(1, '$'))
+  normal 2GO
+  let expected =<< trim END
+      nop;
+      //
+      // This is a comment
+      //
+      val = val;
+  END
+  call assert_equal(expected, getline(1, '$'))
+
+  " Using "o" repeats a line comment after a statement, "O" does not.
+  %del
+  let text =<< trim END
+      nop;
+      val = val;      // This is a comment
+  END
+  call setline(1, text)
+  normal 2Go
+  let expected =<< trim END
+      nop;
+      val = val;      // This is a comment
+                      //
+  END
+  call assert_equal(expected, getline(1, '$'))
+  3delete
+
+  " No comment repeated with a slash in 'formatoptions'
+  set fo+=/
+  normal 2Gox
+  let expected =<< trim END
+      nop;
+      val = val;      // This is a comment
+      x
+  END
+  call assert_equal(expected, getline(1, '$'))
+
+  " Comment is formatted when it wraps
+  normal 2GA with some more text added
+  let expected =<< trim END
+      nop;
+      val = val;      // This is a comment
+                      // with some more text
+                      // added
+      x
+  END
+  call assert_equal(expected, getline(1, '$'))
+
+  set fo-=/
+
+  " using 'indentexpr' instead of 'cindent' does not repeat a comment
+  setl nocindent indentexpr=2
+  %del
+  let text =<< trim END
+      nop;
+      val = val;      // This is a comment
+  END
+  call setline(1, text)
+  normal 2Gox
+  let expected =<< trim END
+      nop;
+      val = val;      // This is a comment
+        x
+  END
+  call assert_equal(expected, getline(1, '$'))
+  setl cindent indentexpr=
+  3delete
+
+  normal 2GO
+  let expected =<< trim END
+      nop;
+
+      val = val;      // This is a comment
+  END
+  call assert_equal(expected, getline(1, '$'))
+
+  " Using "o" does not repeat a comment in a string
+  %del
+  let text =<< trim END
+      nop;
+      val = " // This is not a comment";
+  END
+  call setline(1, text)
+  normal 2Gox
+  let expected =<< trim END
+      nop;
+      val = " // This is not a comment";
+      x
+  END
+  call assert_equal(expected, getline(1, '$'))
+
+  " Using CTRL-U after "o" fixes the indent
+  %del
+  let text =<< trim END
+      {
+         val = val;      // This is a comment
+  END
+  call setline(1, text)
+  exe "normal! 2Go\<C-U>x\<Esc>"
+  let expected =<< trim END
+      {
+         val = val;      // This is a comment
+         x
+  END
+  call assert_equal(expected, getline(1, '$'))
+
+  " typing comment text auto-wraps
+  %del
+  call setline(1, text)
+  exe "normal! 2GA blah more text blah.\<Esc>"
+  let expected =<< trim END
+      {
+         val = val;      // This is a comment
+                         // blah more text
+                         // blah.
+  END
+  call assert_equal(expected, getline(1, '$'))
+
+  bwipe!
+endfunc
+
 " Tests for :right, :center and :left on text with embedded TAB.
 func Test_format_align()
   enew!
@@ -784,78 +962,6 @@ func Test_tw_2_fo_tm_noai()
   bwipe!
 endfunc
 
-func Test_tw_2_fo_cqm_com()
-  new
-  let t =<< trim END
-    {
-    Ｘ
-    Ｘa
-    ＸaＹ
-    ＸＹ
-    ＸＹＺ
-    Ｘ Ｙ
-    Ｘ ＹＺ
-    ＸＸ
-    ＸＸa
-    ＸＸＹ
-    }
-  END
-  call setline(1, t)
-  call cursor(2, 1)
-
-  set tw=2 fo=cqm comments=n:Ｘ
-  exe "normal gqgqjgqgqjgqgqjgqgqjgqgqjgqgqjgqgqjgqgqjgqgqjgqgq"
-  let t =<< trim END
-    Ｘ
-    Ｘa
-    ＸaＹ
-    ＸＹ
-    ＸＹＺ
-    Ｘ Ｙ
-    Ｘ ＹＺ
-    ＸＸ
-    ＸＸa
-    ＸＸＹ
-  END
-  exe "normal o\n" . join(t, "\n")
-
-  let expected =<< trim END
-    {
-    Ｘ
-    Ｘa
-    Ｘa
-    ＸＹ
-    ＸＹ
-    ＸＹ
-    ＸＺ
-    Ｘ Ｙ
-    Ｘ Ｙ
-    Ｘ Ｚ
-    ＸＸ
-    ＸＸa
-    ＸＸＹ
-
-    Ｘ
-    Ｘa
-    Ｘa
-    ＸＹ
-    ＸＹ
-    ＸＹ
-    ＸＺ
-    Ｘ Ｙ
-    Ｘ Ｙ
-    Ｘ Ｚ
-    ＸＸ
-    ＸＸa
-    ＸＸＹ
-    }
-  END
-  call assert_equal(expected, getline(1, '$'))
-
-  set tw& fo& comments&
-  bwipe!
-endfunc
-
 func Test_tw_2_fo_tm_replace()
   new
   let t =<< trim END
@@ -930,6 +1036,29 @@ func Test_mps_latin1()
   close!
 endfunc
 
+func Test_empty_matchpairs()
+  split
+  set matchpairs= showmatch
+  call assert_nobeep('call feedkeys("ax\tx\t\<Esc>", "xt")')
+  set matchpairs& noshowmatch
+  bwipe!
+endfunc
+
+func Test_mps_error()
+  let encoding_save = &encoding
+
+  for e in ['utf-8', 'latin1']
+    exe 'set encoding=' .. e
+
+    call assert_fails('set mps=<:', 'E474:', e)
+    call assert_fails('set mps=:>', 'E474:', e)
+    call assert_fails('set mps=<>', 'E474:', e)
+    call assert_fails('set mps=<:>_', 'E474:', e)
+  endfor
+
+  let &encoding = encoding_save
+endfunc
+
 " Test for ra on multi-byte characters
 func Test_ra_multibyte()
   new
@@ -975,146 +1104,26 @@ func Test_whichwrap_multi_byte()
   bwipe!
 endfunc
 
-" Test for automatically adding comment leaders in insert mode
-func Test_threepiece_comment()
-  new
-  setlocal expandtab
-  call setline(1, ["\t/*"])
-  setlocal formatoptions=croql
-  call cursor(1, 3)
-  call feedkeys("A\<cr>\<cr>/", 'tnix')
-  call assert_equal(["\t/*", " *", " */"], getline(1, '$'))
-
-  " If a comment ends in a single line, then don't add it in the next line
-  %d
-  call setline(1, '/* line1 */')
-  call feedkeys("A\<CR>next line", 'xt')
-  call assert_equal(['/* line1 */', 'next line'], getline(1, '$'))
-
-  %d
-  " Copy the trailing indentation from the leader comment to a new line
-  setlocal autoindent noexpandtab
-  call feedkeys("a\t/*\tone\ntwo\n/", 'xt')
-  call assert_equal(["\t/*\tone", "\t *\ttwo", "\t */"], getline(1, '$'))
-  close!
-endfunc
-
-" Test for the 'f' flag in 'comments' (only the first line has the comment
-" string)
-func Test_firstline_comment()
-  new
-  setlocal comments=f:- fo+=ro
-  exe "normal i- B\nD\<C-C>ggoC\<C-C>ggOA\<C-C>"
-  call assert_equal(['A', '- B', '  C', '  D'], getline(1, '$'))
-  %d
-  setlocal comments=:-
-  exe "normal i- B\nD\<C-C>ggoC\<C-C>ggOA\<C-C>"
-  call assert_equal(['- A', '- B', '- C', '- D'], getline(1, '$'))
-  %bw!
-endfunc
-
-" Test for the 'r' flag in 'comments' (right align comment)
-func Test_comment_rightalign()
-  new
-  setlocal comments=sr:/***,m:**,ex-2:******/ fo+=ro
-  exe "normal i=\<C-C>o\t  /***\nD\n/"
-  exe "normal 2GOA\<C-C>joB\<C-C>jOC\<C-C>joE\<C-C>GOF\<C-C>joG"
-  let expected =<< trim END
-    =
-    A
-    	  /***
-    	    ** B
-    	    ** C
-    	    ** D
-    	    ** E
-    	    **     F
-    	    ******/
-    G
-  END
-  call assert_equal(expected, getline(1, '$'))
-  %bw!
-endfunc
-
-" Test for the 'b' flag in 'comments'
-func Test_comment_blank()
-  new
-  setlocal comments=b:* fo+=ro
-  exe "normal i* E\nF\n\<BS>G\nH\<C-C>ggOC\<C-C>O\<BS>B\<C-C>OA\<C-C>2joD"
-  let expected =<< trim END
-    A
-    *B
-    * C
-    * D
-    * E
-    * F
-    *G
-    H
-  END
-  call assert_equal(expected, getline(1, '$'))
-  %bw!
-endfunc
-
-" Test for the 'n' flag in comments
-func Test_comment_nested()
-  new
-  setlocal comments=n:> fo+=ro
-  exe "normal i> B\nD\<C-C>ggOA\<C-C>joC\<C-C>Go\<BS>>>> F\nH"
-  exe "normal 5GOE\<C-C>6GoG"
-  let expected =<< trim END
-    > A
-    > B
-    > C
-    > D
-    >>>> E
-    >>>> F
-    >>>> G
-    >>>> H
-  END
-  call assert_equal(expected, getline(1, '$'))
-  %bw!
-endfunc
-
-" Test for a space character in 'comments' setting
-func Test_comment_space()
-  new
-  setlocal comments=b:\ > fo+=ro
-  exe "normal i> B\nD\<C-C>ggOA\<C-C>joC"
-  exe "normal Go > F\nH\<C-C>kOE\<C-C>joG"
-  let expected =<< trim END
-    A
-    > B
-    C
-    D
-     > E
-     > F
-     > G
-     > H
-  END
-  call assert_equal(expected, getline(1, '$'))
-  %bw!
-endfunc
-
-" Test for the 'O' flag in 'comments'
-func Test_comment_O()
-  new
-  setlocal comments=Ob:* fo+=ro
-  exe "normal i* B\nD\<C-C>kOA\<C-C>joC"
-  let expected =<< trim END
-    A
-    * B
-    * C
-    * D
-  END
-  call assert_equal(expected, getline(1, '$'))
-  %bw!
-endfunc
-
 " Test for 'a' and 'w' flags in 'formatoptions'
 func Test_fo_a_w()
   new
   setlocal fo+=aw tw=10
   call feedkeys("iabc abc a abc\<Esc>k0weade", 'xt')
   call assert_equal(['abc abcde ', 'a abc'], getline(1, '$'))
+
+  " when a line ends with space, it is not broken up.
+  %d
+  call feedkeys("ione two to    ", 'xt')
+  call assert_equal('one two to    ', getline(1))
+
+  " when a line ends with spaces and backspace is used in the next line, the
+  " last space in the previous line should be removed.
+  %d
+  set backspace=indent,eol,start
+  call setline(1, ['one    ', 'two'])
+  exe "normal 2Gi\<BS>"
+  call assert_equal(['one   two'], getline(1, '$'))
+  set backspace&
 
   " Test for 'a', 'w' and '1' options.
   setlocal textwidth=0
@@ -1126,25 +1135,25 @@ func Test_fo_a_w()
   call assert_equal('g uu uu ', getline(1)[-8:])
   call assert_equal(['uu. foo'], getline(2, '$'))
 
-  %bw!
-endfunc
+  " using backspace or "x" triggers reformat
+  call setline(1, ['1 2 3 4 5 ', '6 7 8 9'])
+  set tw=10
+  set fo=taw
+  set bs=indent,eol,start
+  exe "normal 1G4la\<BS>\<BS>\<Esc>"
+  call assert_equal(['1 2 4 5 6 ', '7 8 9'], getline(1, 2))
+  exe "normal f4xx"
+  call assert_equal(['1 2 5 6 7 ', '8 9'], getline(1, 2))
 
-" Test for 'j' flag in 'formatoptions'
-func Test_fo_j()
-  new
-  setlocal fo+=j comments=://
-  call setline(1, ['i++; // comment1', '           // comment2'])
-  normal J
-  call assert_equal('i++; // comment1 comment2', getline(1))
-  setlocal fo-=j
-  call setline(1, ['i++; // comment1', '           // comment2'])
-  normal J
-  call assert_equal('i++; // comment1 // comment2', getline(1))
-  " Test with nested comments
-  setlocal fo+=j comments=n:>,n:)
-  call setline(1, ['i++; > ) > ) comment1', '           > ) comment2'])
-  normal J
-  call assert_equal('i++; > ) > ) comment1 comment2', getline(1))
+  " using "cw" leaves cursor in right spot
+  call setline(1, ['Now we g whether that nation, or',
+      \ 'any nation so conceived and,'])
+  set fo=tcqa tw=35
+  exe "normal 2G0cwx\<Esc>"
+  call assert_equal(['Now we g whether that nation, or x', 'nation so conceived and,'], getline(1, 2))
+
+  set tw=0
+  set fo&
   %bw!
 endfunc
 
@@ -1282,51 +1291,49 @@ func Test_fo_2()
   close!
 endfunc
 
-" Test for formatting lines where only the first line has a comment.
-func Test_fo_gq_with_firstline_comment()
+" This was leaving the cursor after the end of a line.  Complicated way to
+" have the problem show up with valgrind.
+func Test_correct_cursor_position()
+  set encoding=iso8859
   new
-  setlocal formatoptions=tcq
-  call setline(1, ['- one two', 'three'])
-  normal gggqG
-  call assert_equal(['- one two three'], getline(1, '$'))
+  norm a0000
+  sil! norm gggg0i0gw0gg
 
-  %d
-  call setline(1, ['- one', '- two'])
-  normal gggqG
-  call assert_equal(['- one', '- two'], getline(1, '$'))
-  close!
+  bwipe!
+  set encoding=utf8
 endfunc
 
-" Test for trying to join a comment line with a non-comment line
-func Test_join_comments()
+" This was crashing Vim
+func Test_textwidth_overflow()
   new
-  call setline(1, ['one', '/* two */', 'three'])
-  normal gggqG
-  call assert_equal(['one', '/* two */', 'three'], getline(1, '$'))
-  close!
+  setl tw=999999999
+  normal 10ig
+  call feedkeys('a ab cd ef', 'xt')
+  bw!
 endfunc
 
-" Test for using 'a' in 'formatoptions' with comments
-func Test_autoformat_comments()
+func Test_breakindent_reformat()
+  " Make sure textformatting uses the full width
+  " of the textwidth and does not consider the indent
+  " from breakindent into account when calculating the
+  " line length. Should break at tw 78 and not at 70
+  CheckOption breakindent
   new
-  setlocal formatoptions+=a
-  call feedkeys("a- one\n- two\n", 'xt')
-  call assert_equal(['- one', '- two', ''], getline(1, '$'))
-
-  %d
-  call feedkeys("a\none\n", 'xt')
-  call assert_equal(['', 'one', ''], getline(1, '$'))
-
-  setlocal formatoptions+=aw
-  %d
-  call feedkeys("aone \ntwo\n", 'xt')
-  call assert_equal(['one two', ''], getline(1, '$'))
-
-  %d
-  call feedkeys("aone\ntwo\n", 'xt')
-  call assert_equal(['one', 'two', ''], getline(1, '$'))
-
-  close!
+  80vnew
+  39vnew
+  setl ai breakindent tw=78
+  let lorem = [
+  \  '	Lorem ipsum dolor sit amet, consectetur adipiscing elit. Etiam luctus',
+  \  '	lectus sodales, dictum augue vel, molestie augue. Duis sit amet',
+  \  '	rhoncus justo. Nullam posuere risus semper magna commodo scelerisque.',
+  \  '	Duis et venenatis sem. In rhoncus augue sed tempor mattis. Mauris id',
+  \  '	aliquet odio.']
+  call setline(1, lorem)
+  norm! gqap
+  call assert_equal(lorem, getline(1, '$'))
+  bw!
+  bw!
+  bw!
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

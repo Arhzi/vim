@@ -69,6 +69,10 @@
 # undef PY_SSIZE_T_CLEAN
 #endif
 
+// these are NULL for Python 2
+#define ERRORS_DECODE_ARG NULL
+#define ERRORS_ENCODE_ARG ERRORS_DECODE_ARG
+
 #undef main // Defined in python.h - aargh
 #undef HAVE_FCNTL_H // Clash with os_win32.h
 
@@ -126,7 +130,12 @@ struct PyMethodDef { Py_ssize_t a; };
 #  define HINSTANCE long_u		// for generating prototypes
 # endif
 
-# ifndef MSWIN
+# ifdef MSWIN
+#  define load_dll vimLoadLib
+#  define close_dll FreeLibrary
+#  define symbol_from_dll GetProcAddress
+#  define load_dll_error GetWin32Error
+# else
 #  include <dlfcn.h>
 #  define FARPROC void*
 #  define HINSTANCE void*
@@ -137,10 +146,7 @@ struct PyMethodDef { Py_ssize_t a; };
 #  endif
 #  define close_dll dlclose
 #  define symbol_from_dll dlsym
-# else
-#  define load_dll vimLoadLib
-#  define close_dll FreeLibrary
-#  define symbol_from_dll GetProcAddress
+#  define load_dll_error dlerror
 # endif
 
 // This makes if_python.c compile without warnings against Python 2.5
@@ -311,7 +317,7 @@ struct PyMethodDef { Py_ssize_t a; };
  */
 static int(*dll_PyArg_Parse)(PyObject *, char *, ...);
 static int(*dll_PyArg_ParseTuple)(PyObject *, char *, ...);
-static int(*dll_PyMem_Free)(void *);
+static void(*dll_PyMem_Free)(void *);
 static void* (*dll_PyMem_Malloc)(size_t);
 static int(*dll_PyDict_SetItemString)(PyObject *dp, char *key, PyObject *item);
 static int(*dll_PyErr_BadArgument)(void);
@@ -490,14 +496,14 @@ static struct
     PYTHON_PROC *ptr;
 } python_funcname_table[] =
 {
-# ifndef PY_SSIZE_T_CLEAN
-    {"PyArg_Parse", (PYTHON_PROC*)&dll_PyArg_Parse},
-    {"PyArg_ParseTuple", (PYTHON_PROC*)&dll_PyArg_ParseTuple},
-    {"Py_BuildValue", (PYTHON_PROC*)&dll_Py_BuildValue},
-# else
+# ifdef PY_SSIZE_T_CLEAN
     {"_PyArg_Parse_SizeT", (PYTHON_PROC*)&dll_PyArg_Parse},
     {"_PyArg_ParseTuple_SizeT", (PYTHON_PROC*)&dll_PyArg_ParseTuple},
     {"_Py_BuildValue_SizeT", (PYTHON_PROC*)&dll_Py_BuildValue},
+# else
+    {"PyArg_Parse", (PYTHON_PROC*)&dll_PyArg_Parse},
+    {"PyArg_ParseTuple", (PYTHON_PROC*)&dll_PyArg_ParseTuple},
+    {"Py_BuildValue", (PYTHON_PROC*)&dll_Py_BuildValue},
 # endif
     {"PyMem_Free", (PYTHON_PROC*)&dll_PyMem_Free},
     {"PyMem_Malloc", (PYTHON_PROC*)&dll_PyMem_Malloc},
@@ -668,12 +674,12 @@ python_runtime_link_init(char *libname, int verbose)
 
 # if !(defined(PY_NO_RTLD_GLOBAL) && defined(PY3_NO_RTLD_GLOBAL)) && defined(UNIX) && defined(FEAT_PYTHON3)
     // Can't have Python and Python3 loaded at the same time.
-    // It cause a crash, because RTLD_GLOBAL is needed for
+    // It causes a crash, because RTLD_GLOBAL is needed for
     // standard C extension libraries of one or both python versions.
     if (python3_loaded())
     {
 	if (verbose)
-	    emsg(_("E836: This Vim cannot execute :python after using :py3"));
+	    emsg(_(e_this_vim_cannot_execute_python_after_using_py3));
 	return FAIL;
     }
 # endif
@@ -684,7 +690,7 @@ python_runtime_link_init(char *libname, int verbose)
     if (!hinstPython)
     {
 	if (verbose)
-	    semsg(_(e_loadlib), libname);
+	    semsg(_(e_could_not_load_library_str_str), libname, load_dll_error());
 	return FAIL;
     }
 
@@ -696,7 +702,7 @@ python_runtime_link_init(char *libname, int verbose)
 	    close_dll(hinstPython);
 	    hinstPython = 0;
 	    if (verbose)
-		semsg(_(e_loadfunc), python_funcname_table[i].name);
+		semsg(_(e_could_not_load_library_function_str), python_funcname_table[i].name);
 	    return FAIL;
 	}
     }
@@ -713,7 +719,7 @@ python_runtime_link_init(char *libname, int verbose)
 	close_dll(hinstPython);
 	hinstPython = 0;
 	if (verbose)
-	    semsg(_(e_loadfunc), "PyUnicode_UCSX_*");
+	    semsg(_(e_could_not_load_library_function_str), "PyUnicode_UCSX_*");
 	return FAIL;
     }
 
@@ -913,7 +919,7 @@ Python_Init(void)
 #ifdef DYNAMIC_PYTHON
 	if (!python_enabled(TRUE))
 	{
-	    emsg(_("E263: Sorry, this command is disabled, the Python library could not be loaded."));
+	    emsg(_(e_sorry_this_command_is_disabled_python_library_could_not_be_found));
 	    goto fail;
 	}
 #endif
@@ -945,7 +951,7 @@ Python_Init(void)
 	site = PyImport_ImportModule("site");
 	if (site == NULL)
 	{
-	    emsg(_("E887: Sorry, this command is disabled, the Python's site module could not be loaded."));
+	    emsg(_(e_sorry_this_command_is_disabled_python_side_module_could_not_be_loaded));
 	    goto fail;
 	}
 	Py_DECREF(site);
@@ -1018,7 +1024,7 @@ DoPyCommand(const char *cmd, rangeinitializer init_range, runner run, void *arg)
 #ifndef PY_CAN_RECURSE
     if (recursive)
     {
-	emsg(_("E659: Cannot invoke Python recursively"));
+	emsg(_(e_cannot_invoke_python_recursively));
 	return;
     }
     ++recursive;
@@ -1097,7 +1103,7 @@ ex_python(exarg_T *eap)
 	    p_pyx = 2;
 
 	DoPyCommand(script == NULL ? (char *) eap->arg : (char *) script,
-		(rangeinitializer) init_range_cmd,
+		init_range_cmd,
 		(runner) run_cmd,
 		(void *) eap);
     }
@@ -1148,7 +1154,7 @@ ex_pyfile(exarg_T *eap)
 
     // Execute the file
     DoPyCommand(buffer,
-	    (rangeinitializer) init_range_cmd,
+	    init_range_cmd,
 	    (runner) run_cmd,
 	    (void *) eap);
 }
@@ -1160,7 +1166,7 @@ ex_pydo(exarg_T *eap)
 	p_pyx = 2;
 
     DoPyCommand((char *)eap->arg,
-	    (rangeinitializer) init_range_cmd,
+	    init_range_cmd,
 	    (runner)run_do,
 	    (void *)eap);
 }
@@ -1197,16 +1203,16 @@ OutputGetattr(PyObject *self, char *name)
 
 #define BufferType_Check(obj) ((obj)->ob_type == &BufferType)
 
-static PyInt BufferAssItem(PyObject *, PyInt, PyObject *);
-static PyInt BufferAssSlice(PyObject *, PyInt, PyInt, PyObject *);
+static int BufferAssItem(PyObject *, PyInt, PyObject *);
+static int BufferAssSlice(PyObject *, PyInt, PyInt, PyObject *);
 
 // Line range type - Implementation functions
 // --------------------------------------
 
 #define RangeType_Check(obj) ((obj)->ob_type == &RangeType)
 
-static PyInt RangeAssItem(PyObject *, PyInt, PyObject *);
-static PyInt RangeAssSlice(PyObject *, PyInt, PyInt, PyObject *);
+static int RangeAssItem(PyObject *, PyInt, PyObject *);
+static int RangeAssSlice(PyObject *, PyInt, PyInt, PyObject *);
 
 // Current objects type - Implementation functions
 // -----------------------------------------------
@@ -1246,13 +1252,13 @@ BufferGetattr(PyObject *self, char *name)
 
 //////////////////
 
-    static PyInt
+    static int
 BufferAssItem(PyObject *self, PyInt n, PyObject *val)
 {
     return RBAsItem((BufferObject *)(self), n, val, 1, -1, NULL);
 }
 
-    static PyInt
+    static int
 BufferAssSlice(PyObject *self, PyInt lo, PyInt hi, PyObject *val)
 {
     return RBAsSlice((BufferObject *)(self), lo, hi, val, 1, -1, NULL);
@@ -1290,7 +1296,7 @@ RangeGetattr(PyObject *self, char *name)
 
 ////////////////
 
-    static PyInt
+    static int
 RangeAssItem(PyObject *self, PyInt n, PyObject *val)
 {
     return RBAsItem(((RangeObject *)(self))->buf, n, val,
@@ -1299,7 +1305,7 @@ RangeAssItem(PyObject *self, PyInt n, PyObject *val)
 		     &((RangeObject *)(self))->end);
 }
 
-    static PyInt
+    static int
 RangeAssSlice(PyObject *self, PyInt lo, PyInt hi, PyObject *val)
 {
     return RBAsSlice(((RangeObject *)(self))->buf, lo, hi, val,
@@ -1387,34 +1393,31 @@ static PySequenceMethods WinListAsSeq = {
     void
 python_buffer_free(buf_T *buf)
 {
-    if (BUF_PYTHON_REF(buf) != NULL)
-    {
-	BufferObject *bp = BUF_PYTHON_REF(buf);
-	bp->buf = INVALID_BUFFER_VALUE;
-	BUF_PYTHON_REF(buf) = NULL;
-    }
+    BufferObject *bp = BUF_PYTHON_REF(buf);
+    if (bp == NULL)
+	return;
+    bp->buf = INVALID_BUFFER_VALUE;
+    BUF_PYTHON_REF(buf) = NULL;
 }
 
     void
 python_window_free(win_T *win)
 {
-    if (WIN_PYTHON_REF(win) != NULL)
-    {
-	WindowObject *wp = WIN_PYTHON_REF(win);
-	wp->win = INVALID_WINDOW_VALUE;
-	WIN_PYTHON_REF(win) = NULL;
-    }
+    WindowObject *wp = WIN_PYTHON_REF(win);
+    if (wp == NULL)
+	return;
+    wp->win = INVALID_WINDOW_VALUE;
+    WIN_PYTHON_REF(win) = NULL;
 }
 
     void
 python_tabpage_free(tabpage_T *tab)
 {
-    if (TAB_PYTHON_REF(tab) != NULL)
-    {
-	TabPageObject *tp = TAB_PYTHON_REF(tab);
-	tp->tab = INVALID_TABPAGE_VALUE;
-	TAB_PYTHON_REF(tab) = NULL;
-    }
+    TabPageObject *tp = TAB_PYTHON_REF(tab);
+    if (tp == NULL)
+	return;
+    tp->tab = INVALID_TABPAGE_VALUE;
+    TAB_PYTHON_REF(tab) = NULL;
 }
 
     static int
@@ -1455,7 +1458,7 @@ LineToString(const char *str)
     PyInt len = strlen(str);
     char *p;
 
-    // Allocate an Python string object, with uninitialised contents. We
+    // Allocate a Python string object, with uninitialised contents. We
     // must do it this way, so that we can modify the string in place
     // later. See the Python source, Objects/stringobject.c for details.
     result = PyString_FromStringAndSize(NULL, len);
@@ -1521,7 +1524,7 @@ FunctionGetattr(PyObject *self, char *name)
 do_pyeval(char_u *str, typval_T *rettv)
 {
     DoPyCommand((char *) str,
-	    (rangeinitializer) init_range_eval,
+	    init_range_eval,
 	    (runner) run_eval,
 	    (void *) rettv);
     if (rettv->v_type == VAR_UNKNOWN)

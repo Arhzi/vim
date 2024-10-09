@@ -26,6 +26,7 @@ static int skip_chars(int, int);
 findsent(int dir, long count)
 {
     pos_T	pos, tpos;
+    pos_T	prev_pos;
     int		c;
     int		(*func)(pos_T *);
     int		startlnum;
@@ -41,6 +42,8 @@ findsent(int dir, long count)
 
     while (count--)
     {
+	prev_pos = pos;
+
 	/*
 	 * if on an empty line, skip up to a non-empty line
 	 */
@@ -133,6 +136,18 @@ found:
 	while (!noskip && ((c = gchar_pos(&pos)) == ' ' || c == '\t'))
 	    if (incl(&pos) == -1)
 		break;
+
+	if (EQUAL_POS(prev_pos, pos))
+	{
+	    // didn't actually move, advance one character and try again
+	    if ((*func)(&pos) == -1)
+	    {
+		if (count)
+		    return FAIL;
+		break;
+	    }
+	    ++count;
+	}
     }
 
     setpcmark();
@@ -211,13 +226,13 @@ findpar(
     if (both && *ml_get(curr) == '}')	// include line with '}'
 	++curr;
     curwin->w_cursor.lnum = curr;
-    if (curr == curbuf->b_ml.ml_line_count && what != '}')
+    if (curr == curbuf->b_ml.ml_line_count && what != '}' && dir == FORWARD)
     {
 	char_u *line = ml_get(curr);
 
 	// Put the cursor on the last character in the last line and make the
 	// motion inclusive.
-	if ((curwin->w_cursor.col = (colnr_T)STRLEN(line)) != 0)
+	if ((curwin->w_cursor.col = ml_get_len(curr)) != 0)
 	{
 	    --curwin->w_cursor.col;
 	    curwin->w_cursor.col -=
@@ -457,6 +472,7 @@ bck_word(long count, int bigword, int stop)
 finished:
 	stop = FALSE;
     }
+    adjust_skipcol();
     return OK;
 }
 
@@ -583,6 +599,7 @@ bckend_word(
 		return OK;
 	}
     }
+    adjust_skipcol();
     return OK;
 }
 
@@ -599,7 +616,6 @@ skip_chars(int cclass, int dir)
     return FALSE;
 }
 
-#if defined(FEAT_TEXTOBJ) || defined(PROTO)
 /*
  * Go back to the start of the word or the start of white space
  */
@@ -725,7 +741,7 @@ current_word(
 	{
 	    // should do something when inclusive == FALSE !
 	    VIsual = start_pos;
-	    redraw_curbuf_later(INVERTED);	// update the inversion
+	    redraw_curbuf_later(UPD_INVERTED);	// update the inversion
 	}
 	else
 	{
@@ -995,7 +1011,7 @@ extend:
 	VIsual = start_pos;
 	VIsual_mode = 'v';
 	redraw_cmdline = TRUE;		// show mode later
-	redraw_curbuf_later(INVERTED);	// update the inversion
+	redraw_curbuf_later(UPD_INVERTED);	// update the inversion
     }
     else
     {
@@ -1064,12 +1080,25 @@ current_block(
      */
     save_cpo = p_cpo;
     p_cpo = (char_u *)(vim_strchr(p_cpo, CPO_MATCHBSL) != NULL ? "%M" : "%");
-    while (count-- > 0)
+    if ((pos = findmatch(NULL, what)) != NULL)
     {
-	if ((pos = findmatch(NULL, what)) == NULL)
-	    break;
-	curwin->w_cursor = *pos;
-	start_pos = *pos;   // the findmatch for end_pos will overwrite *pos
+	while (count-- > 0)
+	{
+	    if ((pos = findmatch(NULL, what)) == NULL)
+		break;
+	    curwin->w_cursor = *pos;
+	    start_pos = *pos;   // the findmatch for end_pos will overwrite *pos
+	}
+    }
+    else
+    {
+	while (count-- > 0)
+	{
+	    if ((pos = findmatchlimit(NULL, what, FM_FORWARD, 0)) == NULL)
+		break;
+	    curwin->w_cursor = *pos;
+	    start_pos = *pos;   // the findmatch for end_pos will overwrite *pos
+	}
     }
     p_cpo = save_cpo;
 
@@ -1103,10 +1132,22 @@ current_block(
 	}
 
 	/*
+	 * In Visual mode, when resulting area is empty
+	 * i.e. there is no inner block to select, abort.
+	 */
+	if (EQUAL_POS(start_pos, *end_pos) && VIsual_active)
+	{
+	    curwin->w_cursor = old_pos;
+	    return FAIL;
+	}
+
+	/*
 	 * In Visual mode, when the resulting area is not bigger than what we
 	 * started with, extend it to the next block, and then exclude again.
+	 * Don't try to expand the area if the area is empty.
 	 */
 	if (!LT_POS(start_pos, old_start) && !LT_POS(old_end, curwin->w_cursor)
+		&& !EQUAL_POS(start_pos, curwin->w_cursor)
 		&& VIsual_active)
 	{
 	    curwin->w_cursor = old_start;
@@ -1137,7 +1178,7 @@ current_block(
 	    inc(&curwin->w_cursor);	// include the line break
 	VIsual = start_pos;
 	VIsual_mode = 'v';
-	redraw_curbuf_later(INVERTED);	// update the inversion
+	redraw_curbuf_later(UPD_INVERTED);	// update the inversion
 	showmode();
     }
     else
@@ -1159,6 +1200,7 @@ current_block(
     return OK;
 }
 
+#if defined(FEAT_EVAL) || defined(PROTO)
 /*
  * Return TRUE if the cursor is on a "<aaa>" tag.  Ignore "<aaa/>".
  * When "end_tag" is TRUE return TRUE if the cursor is on "</aaa>".
@@ -1332,7 +1374,7 @@ again:
 	curwin->w_cursor = old_pos;
 	goto theend;
     }
-    spat = alloc(len + 31);
+    spat = alloc(len + 39);
     epat = alloc(len + 9);
     if (spat == NULL || epat == NULL)
     {
@@ -1341,7 +1383,7 @@ again:
 	curwin->w_cursor = old_pos;
 	goto theend;
     }
-    sprintf((char *)spat, "<%.*s\\>\\%%(\\s\\_[^>]\\{-}[^/]>\\|>\\)\\c", len, p);
+    sprintf((char *)spat, "<%.*s\\>\\%%(\\_s\\_[^>]\\{-}\\_[^/]>\\|\\_s\\?>\\)\\c", len, p);
     sprintf((char *)epat, "</%.*s>\\c", len, p);
 
     r = do_searchpair(spat, (char_u *)"", epat, FORWARD, NULL,
@@ -1384,15 +1426,22 @@ again:
 
     if (!do_include)
     {
-	// Exclude the start tag.
+	// Exclude the start tag,
+	// but skip over '>' if it appears in quotes
+	int in_quotes = FALSE;
 	curwin->w_cursor = start_pos;
 	while (inc_cursor() >= 0)
-	    if (*ml_get_cursor() == '>')
+	{
+	    p = ml_get_cursor();
+	    if (*p == '>' && !in_quotes)
 	    {
 		inc_cursor();
 		start_pos = curwin->w_cursor;
 		break;
 	    }
+	    else if (*p == '"' || *p == '\'')
+		in_quotes = !in_quotes;
+	}
 	curwin->w_cursor = end_pos;
 
 	// If we are in Visual mode and now have the same text as before set
@@ -1417,7 +1466,7 @@ again:
 	    inc_cursor();
 	VIsual = start_pos;
 	VIsual_mode = 'v';
-	redraw_curbuf_later(INVERTED);	// update the inversion
+	redraw_curbuf_later(UPD_INVERTED);	// update the inversion
 	showmode();
     }
     else
@@ -1440,6 +1489,7 @@ theend:
     p_ws = save_p_ws;
     return retval;
 }
+#endif
 
     int
 current_par(
@@ -1600,7 +1650,7 @@ extend:
 	    VIsual.col = 0;
 	}
 	VIsual_mode = 'V';
-	redraw_curbuf_later(INVERTED);	// update the inversion
+	redraw_curbuf_later(UPD_INVERTED);	// update the inversion
 	showmode();
     }
     else
@@ -1636,7 +1686,11 @@ find_next_quote(
 	if (c == NUL)
 	    return -1;
 	else if (escape != NULL && vim_strchr(escape, c))
+	{
 	    ++col;
+	    if (line[col] == NUL)
+		return -1;
+	}
 	else if (c == quotechar)
 	    break;
 	if (has_mbyte)
@@ -1764,11 +1818,17 @@ current_quote(
 
 	// Find out if we have a quote in the selection.
 	while (i <= col_end)
+	{
+	    // check for going over the end of the line, which can happen if
+	    // the line was changed after the Visual area was selected.
+	    if (line[i] == NUL)
+		break;
 	    if (line[i++] == quotechar)
 	    {
 		selected_quote = TRUE;
 		break;
 	    }
+	}
     }
 
     if (!vis_empty && line[col_start] == quotechar)
@@ -1893,7 +1953,7 @@ current_quote(
 				|| line[VIsual.col - 1] != quotechar)))))
 	{
 	    VIsual = curwin->w_cursor;
-	    redraw_curbuf_later(INVERTED);
+	    redraw_curbuf_later(UPD_INVERTED);
 	}
     }
     else
@@ -1961,5 +2021,3 @@ abort_search:
     }
     return FALSE;
 }
-
-#endif // FEAT_TEXTOBJ

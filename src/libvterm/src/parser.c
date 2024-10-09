@@ -34,7 +34,7 @@ static void do_csi(VTerm *vt, char command)
 
   if(vt->parser.callbacks && vt->parser.callbacks->csi)
     if((*vt->parser.callbacks->csi)(
-          vt->parser.v.csi.leaderlen ? vt->parser.v.csi.leader : NULL, 
+          vt->parser.v.csi.leaderlen ? vt->parser.v.csi.leader : NULL,
           vt->parser.v.csi.args,
           vt->parser.v.csi.argi,
           vt->parser.intermedlen ? vt->parser.intermed : NULL,
@@ -77,8 +77,23 @@ static void string_fragment(VTerm *vt, const char *str, size_t len, int final)
       break;
 
     case DCS:
-      if(len && vt->parser.callbacks && vt->parser.callbacks->dcs)
+      if(vt->parser.callbacks && vt->parser.callbacks->dcs)
         (*vt->parser.callbacks->dcs)(vt->parser.v.dcs.command, vt->parser.v.dcs.commandlen, frag, vt->parser.cbdata);
+      break;
+
+    case APC:
+      if(vt->parser.callbacks && vt->parser.callbacks->apc)
+        (*vt->parser.callbacks->apc)(frag, vt->parser.cbdata);
+      break;
+
+    case PM:
+      if(vt->parser.callbacks && vt->parser.callbacks->pm)
+        (*vt->parser.callbacks->pm)(frag, vt->parser.cbdata);
+      break;
+
+    case SOS:
+      if(vt->parser.callbacks && vt->parser.callbacks->sos)
+        (*vt->parser.callbacks->sos)(frag, vt->parser.cbdata);
       break;
 
     case NORMAL:
@@ -112,6 +127,9 @@ size_t vterm_input_write(VTerm *vt, const char *bytes, size_t len)
     break;
   case OSC:
   case DCS:
+  case APC:
+  case PM:
+  case SOS:
     string_start = bytes;
     break;
   }
@@ -124,18 +142,21 @@ size_t vterm_input_write(VTerm *vt, const char *bytes, size_t len)
   for( ; pos < len; pos++) {
     unsigned char c = bytes[pos];
     int c1_allowed = !vt->mode.utf8;
-    size_t string_len;
 
     if(c == 0x00 || c == 0x7f) { // NUL, DEL
       if(IS_STRING_STATE()) {
         string_fragment(vt, string_start, bytes + pos - string_start, FALSE);
         string_start = bytes + pos + 1;
       }
+      if(vt->parser.emit_nul)
+        do_control(vt, c);
       continue;
     }
     if(c == 0x18 || c == 0x1a) { // CAN, SUB
       vt->parser.in_esc = FALSE;
       ENTER_NORMAL_STATE();
+      if(vt->parser.emit_nul)
+        do_control(vt, c);
       continue;
     }
     else if(c == 0x1b) { // ESC
@@ -150,6 +171,9 @@ size_t vterm_input_write(VTerm *vt, const char *bytes, size_t len)
       // fallthrough
     }
     else if(c < 0x20) { // other C0
+      if(vt->parser.state == SOS)
+        continue; // All other C0s permitted in SOS
+
       if(vterm_get_special_pty_type() == 2) {
         if(c == 0x08) // BS
           // Set the trick for BS output after a sequence, to delay backspace
@@ -166,7 +190,7 @@ size_t vterm_input_write(VTerm *vt, const char *bytes, size_t len)
     }
     // else fallthrough
 
-    string_len = bytes + pos - string_start;
+    size_t string_len = bytes + pos - string_start;
 
     if(vt->parser.in_esc) {
       // Hoist an ESC letter into a C1 if we're not in a string mode
@@ -176,7 +200,8 @@ size_t vterm_input_write(VTerm *vt, const char *bytes, size_t len)
           ((!IS_STRING_STATE() || c == 0x5c))) {
         c += 0x40;
         c1_allowed = TRUE;
-        string_len -= 1;
+        if(string_len)
+          string_len -= 1;
         vt->parser.in_esc = FALSE;
       }
       else {
@@ -225,7 +250,7 @@ size_t vterm_input_write(VTerm *vt, const char *bytes, size_t len)
       vt->parser.v.csi.argi++;
       vt->parser.intermedlen = 0;
       vt->parser.state = CSI_INTERMED;
-      // fallthrough
+      // FALLTHROUGH
     case CSI_INTERMED:
       if(is_intermed(c)) {
         if(vt->parser.intermedlen < INTERMED_MAX-1)
@@ -279,6 +304,9 @@ size_t vterm_input_write(VTerm *vt, const char *bytes, size_t len)
 string_state:
     case OSC:
     case DCS:
+    case APC:
+    case PM:
+    case SOS:
       if(c == 0x07 || (c1_allowed && c == 0x9c)) {
         string_fragment(vt, string_start, string_len, TRUE);
         ENTER_NORMAL_STATE();
@@ -308,6 +336,12 @@ string_state:
           vt->parser.v.dcs.commandlen = 0;
           ENTER_STATE(DCS_COMMAND);
           break;
+        case 0x98: // SOS
+          vt->parser.string_initial = TRUE;
+          ENTER_STATE(SOS);
+          string_start = bytes + pos + 1;
+          string_len = 0;
+          break;
         case 0x9b: // CSI
           vt->parser.v.csi.leaderlen = 0;
           ENTER_STATE(CSI_LEADER);
@@ -317,6 +351,18 @@ string_state:
           vt->parser.string_initial = TRUE;
           string_start = bytes + pos + 1;
           ENTER_STATE(OSC_COMMAND);
+          break;
+        case 0x9e: // PM
+          vt->parser.string_initial = TRUE;
+          ENTER_STATE(PM);
+          string_start = bytes + pos + 1;
+          string_len = 0;
+          break;
+        case 0x9f: // APC
+          vt->parser.string_initial = TRUE;
+          ENTER_STATE(APC);
+          string_start = bytes + pos + 1;
+          string_len = 0;
           break;
         default:
           do_control(vt, c);
@@ -340,8 +386,12 @@ string_state:
     }
   }
 
-  if(string_start)
-    string_fragment(vt, string_start, bytes + pos - string_start, FALSE);
+  if(string_start) {
+    size_t string_len = bytes + pos - string_start;
+    if(vt->parser.in_esc)
+      string_len -= 1;
+    string_fragment(vt, string_start, string_len, FALSE);
+  }
 
   return len;
 }
@@ -355,4 +405,9 @@ void vterm_parser_set_callbacks(VTerm *vt, const VTermParserCallbacks *callbacks
 void *vterm_parser_get_cbdata(VTerm *vt)
 {
   return vt->parser.cbdata;
+}
+
+void vterm_parser_set_emit_nul(VTerm *vt, int emit)
+{
+  vt->parser.emit_nul = emit;
 }

@@ -1,4 +1,4 @@
-*index.txt*     For Vim version 8.2.  Last change: 2020 May 31
+*index.txt*     For Vim version 9.1.  Last change: 2023 Jul 14
 
 
 		  VIM REFERENCE MANUAL    by Bram Moolenaar
@@ -168,6 +168,7 @@ commands in CTRL-X submode				*i_CTRL-X_index*
 |i_CTRL-X_CTRL-Y|	CTRL-X CTRL-Y	scroll down
 |i_CTRL-X_CTRL-U|	CTRL-X CTRL-U	complete with 'completefunc'
 |i_CTRL-X_CTRL-V|	CTRL-X CTRL-V	complete like in : command line
+|i_CTRL-X_CTRL-Z|	CTRL-X CTRL-Z	stop completion, keeping the text as-is
 |i_CTRL-X_CTRL-]|	CTRL-X CTRL-]	complete tags
 |i_CTRL-X_s|		CTRL-X s	spelling suggestions
 
@@ -212,10 +213,12 @@ tag		char	      note action in Normal mode	~
 |<Tab>|		<Tab>		1  go to N newer entry in jump list
 |CTRL-I|	CTRL-I		1  same as <Tab>
 |<NL>|		<NL>		1  same as "j"
+|<S-NL>|	<S-NL>		1  same as CTRL-F
 |CTRL-J|	CTRL-J		1  same as "j"
 		CTRL-K		   not used
 |CTRL-L|	CTRL-L		   redraw screen
 |<CR>|		<CR>		1  cursor to the first CHAR N lines lower
+|<S-CR>|	<S-CR>		1  same as CTRL-F
 |CTRL-M|	CTRL-M		1  same as <CR>
 |CTRL-N|	CTRL-N		1  same as "j"
 |CTRL-O|	CTRL-O		1  go to N older entry in jump list
@@ -235,7 +238,7 @@ tag		char	      note action in Normal mode	~
 |CTRL-\_CTRL-N|	CTRL-\ CTRL-N	   go to Normal mode (no-op)
 |CTRL-\_CTRL-G|	CTRL-\ CTRL-G	   go to mode specified with 'insertmode'
 		CTRL-\ a - z	   reserved for extensions
-		CTRL-\ others      not used
+		CTRL-\ others	   not used
 |CTRL-]|	CTRL-]		   :ta to ident under cursor
 |CTRL-^|	CTRL-^		   edit Nth alternate file (equivalent to
 				   ":e #N")
@@ -246,7 +249,7 @@ tag		char	      note action in Normal mode	~
 				2  filter Nmove text through the {filter}
 				   command
 |!!|		!!{filter}	2  filter N lines through the {filter} command
-|quote|		"{register}  	   use {register} for next delete, yank or put
+|quote|		"{register}	   use {register} for next delete, yank or put
 				   ({.%#:} only work with put)
 |#|		#		1  search backward for the Nth occurrence of
 				   the ident under the cursor
@@ -286,15 +289,17 @@ tag		char	      note action in Normal mode	~
 |star|		*		1  search forward for the Nth occurrence of
 				   the ident under the cursor
 |+|		+		1  same as <CR>
+|<S-Plus>|	<S-+>		1  same as CTRL-F
 |,|		,		1  repeat latest f, t, F or T in opposite
 				   direction N times
 |-|		-		1  cursor to the first CHAR N lines higher
+|<S-Minus>|	<S-->		1  same as CTRL-B
 |.|		.		2  repeat last change with count replaced with
 				   N
 |/|		/{pattern}<CR>	1  search forward for the Nth occurrence of
 				   {pattern}
 |/<CR>|		/<CR>		1  search forward for {pattern} of last search
-|count|		0		1  cursor to the first char of the line
+|0|		0		1  cursor to the first char of the line
 |count|		1		   prepend to command to give a count
 |count|		2			"
 |count|		3			"
@@ -440,6 +445,7 @@ tag		char	      note action in Normal mode	~
 |<C-LeftMouse>|	<C-LeftMouse>	   ":ta" to the keyword at the mouse click
 |<C-Right>|	<C-Right>	1  same as "w"
 |<C-RightMouse>| <C-RightMouse>	   same as "CTRL-T"
+|<C-Tab>|	<C-Tab>		   same as "g<Tab>"
 |<Del>|		["x]<Del>	2  same as "x"
 |N<Del>|	{count}<Del>	   remove the last digit from {count}
 |<Down>|	<Down>		1  same as "j"
@@ -587,6 +593,8 @@ tag		command		   action in Normal mode	~
 				   following the file name.
 |CTRL-W_gt|	CTRL-W g t	   same as `gt`: go to next tab page
 |CTRL-W_gT|	CTRL-W g T	   same as `gT`: go to previous tab page
+|CTRL-W_g<Tab>|	CTRL-W g <Tab>	   same as |g<Tab>|: go to last accessed tab
+				   page.
 |CTRL-W_h|	CTRL-W h	   go to Nth left window (stop at first window)
 |CTRL-W_i|	CTRL-W i	   split window and jump to declaration of
 				   identifier under the cursor
@@ -749,7 +757,7 @@ tag		char	      note action in Normal mode	~
 				   search pattern and Visually select it
 |gP|		["x]gP		2  put the text [from register x] before the
 				   cursor N times, leave the cursor after it
-|gQ|		gQ		    switch to "Ex" mode with Vim editing
+|gQ|		gQ		   switch to "Ex" mode with Vim editing
 |gR|		gR		2  enter Virtual Replace mode
 |gT|		gT		   go to the previous tab page
 |gU|		gU{motion}	2  make Nmove text uppercase
@@ -781,10 +789,10 @@ tag		char	      note action in Normal mode	~
 				   lines down
 |gk|		gk		1  like "k", but when 'wrap' on go N screen
 				   lines up
-|gn|		gn	      1,2  find the next match with the last used
-				   search pattern and Visually select it
 |gm|		gm		1  go to character at middle of the screenline
 |gM|		gM		1  go to character at middle of the text line
+|gn|		gn	      1,2  find the next match with the last used
+				   search pattern and Visually select it
 |go|		go		1  cursor to byte N in the buffer
 |gp|		["x]gp		2  put the text [from register x] after the
 				   cursor N times, leave the cursor after it
@@ -805,6 +813,7 @@ tag		char	      note action in Normal mode	~
 |g<LeftMouse>|	g<LeftMouse>	   same as <C-LeftMouse>
 		g<MiddleMouse>	   same as <C-MiddleMouse>
 |g<RightMouse>|	g<RightMouse>	   same as <C-RightMouse>
+|g<Tab>|	g<Tab>		   go to the last accessed tab page.
 |g<Up>|		g<Up>		1  same as "gk"
 
 ==============================================================================
@@ -860,6 +869,8 @@ tag		char	      note action in Normal mode	~
 |zm|		zm		   subtract one from 'foldlevel'
 |zn|		zn		   reset 'foldenable'
 |zo|		zo		   open fold
+|zp|		zp		   paste in block-mode without trailing spaces
+|zP|		zP		   paste in block-mode without trailing spaces
 |zr|		zr		   add one to 'foldlevel'
 |zs|		zs		   when 'wrap' off scroll horizontally to
 				   position the cursor at the start (left
@@ -872,6 +883,7 @@ tag		char	      note action in Normal mode	~
 |zv|		zv		   open enough folds to view the cursor line
 |zw|		zw		   permanently mark word as incorrectly spelled
 |zx|		zx		   re-apply 'foldlevel' and do "zv"
+|zy|		zy		   yank without trailing spaces
 |zz|		zz		   redraw, cursor line at center of window
 |z<Left>|	z<Left>		   same as "zh"
 |z<Right>|	z<Right>	   same as "zl"
@@ -929,7 +941,9 @@ tag		command	      note action in Visual mode	~
 				   before the highlighted area
 |v_J|		J		2  join the highlighted lines
 |v_K|		K		   run 'keywordprg' on the highlighted area
-|v_O|		O		   Move horizontally to other corner of area.
+|v_O|		O		   move horizontally to other corner of area
+|v_P|		P		   replace highlighted area with register
+				   contents; registers are unchanged
 		Q		   does not start Ex mode
 |v_R|		R		2  delete the highlighted lines and start
 				   insert
@@ -992,6 +1006,8 @@ tag		command	      note action in Visual mode	~
 |v_i{|		i{		   same as iB
 |v_i}|		i}		   same as iB
 |v_o|		o		   move cursor to other corner of area
+|v_p|		p		   replace highlighted area with register
+				   contents; deleted text in unnamed register
 |v_r|		r		2  replace highlighted area with a character
 |v_s|		s		2  delete highlighted area and start insert
 |v_u|		u		2  make highlighted area lowercase
@@ -1100,6 +1116,22 @@ tag		command		action in Command-line editing mode	~
 |c_<Insert>|	<Insert>	toggle insert/overstrike mode
 |c_<LeftMouse>|	<LeftMouse>	cursor at mouse click
 
+commands in wildmenu mode (see 'wildmenu')
+
+		<Up>		move up to parent / select the previous match
+		<Down>		move down to submenu / select the next match
+		<Left>		select the previous match / move up to parent
+		<Right>		select the next match / move down to submenu
+		<CR>		move into submenu when doing menu completion
+		CTRL-E		stop completion and go back to original text
+		CTRL-Y		accept selected match and stop completion
+		other		stop completion and insert the typed character
+
+commands in wildmenu mode with 'wildoptions' set to "pum"
+
+		<PageUp>	select a match several entries back
+		<PageDown>	select a match several entries forward
+
 ==============================================================================
 5. Terminal-Job mode				*terminal-job-index*
 
@@ -1138,12 +1170,14 @@ tag		command		action ~
 |:!!|		:!!		repeat last ":!" command
 |:#|		:#		same as ":number"
 |:&|		:&		repeat last ":substitute"
-|:star|		:*		execute contents of a register
+|:star|		:*		use the last Visual area, like :'<,'>
 |:<|		:<		shift lines one 'shiftwidth' left
-|:=|		:=		print the cursor line number
+|:=|		:=		print the last line number
 |:>|		:>		shift lines one 'shiftwidth' right
 |:@|		:@		execute contents of a register
 |:@@|		:@@		repeat the previous ":@"
+|:2match|	:2mat[ch]	define a second match to highlight
+|:3match|	:3mat[ch]	define a third match to highlight
 |:Next|		:N[ext]		go to previous file in the argument list
 |:Print|	:P[rint]	print lines
 |:X|		:X		ask for encryption key
@@ -1158,6 +1192,7 @@ tag		command		action ~
 				be remapped
 |:args|		:ar[gs]		print the argument list
 |:argadd|	:arga[dd]	add items to the argument list
+|:argdedupe|	:argded[upe]	remove duplicates from the argument list
 |:argdelete|	:argd[elete]	delete items from the argument list
 |:argedit|	:arge[dit]	add item to the argument list and edit it
 |:argdo|	:argdo		do a command on all items in the argument list
@@ -1172,6 +1207,7 @@ tag		command		action ~
 |:bNext|	:bN[ext]	go to previous buffer in the buffer list
 |:ball|		:ba[ll]		open a window for each buffer in the buffer list
 |:badd|		:bad[d]		add buffer to the buffer list
+|:balt|		:balt		like ":badd" but also set the alternate file
 |:bdelete|	:bd[elete]	remove a buffer from the buffer list
 |:behave|	:be[have]	set mouse and selection behavior
 |:belowright|	:bel[owright]	make split window appear right or below
@@ -1225,6 +1261,7 @@ tag		command		action ~
 |:checkpath|	:che[ckpath]	list included files
 |:checktime|	:checkt[ime]	check timestamp of loaded buffers
 |:chistory|	:chi[story]	list the error lists
+|:class|	:class		start of a class specification
 |:clast|	:cla[st]	go to the specified error, default last one
 |:clearjumps|	:cle[arjumps]	clear the jump list
 |:clist|	:cl[ist]	list all errors
@@ -1263,6 +1300,7 @@ tag		command		action ~
 |:debuggreedy|	:debugg[reedy]	read debug mode commands from normal input
 |:def|		:def		define a Vim9 user function
 |:defcompile|	:defc[ompile]	compile Vim9 user functions in current script
+|:defer|	:defer		call function when current function is done
 |:delcommand|	:delc[ommand]	delete user-defined command
 |:delfunction|	:delf[unction]	delete a user function
 |:delmarks|	:delm[arks]	delete marks
@@ -1289,13 +1327,16 @@ tag		command		action ~
 |:edit|		:e[dit]		edit a file
 |:earlier|	:ea[rlier]	go to older change, undo
 |:echo|		:ec[ho]		echoes the result of expressions
+|:echoconsole|	:echoc[onsole]	like :echomsg but write to stdout
 |:echoerr|	:echoe[rr]	like :echo, show like an error and use history
 |:echohl|	:echoh[l]	set highlighting for echo commands
 |:echomsg|	:echom[sg]	same as :echo, put message in history
 |:echon|	:echon		same as :echo, but without <EOL>
+|:echowindow|	:echow[indow]	same as :echomsg, but use a popup window
 |:else|		:el[se]		part of an :if command
 |:elseif|	:elsei[f]	part of an :if command
 |:emenu|	:em[enu]	execute a menu by name
+|:endclass|	:endclass	end of a class specification
 |:enddef|	:enddef		end of a user function started with :def
 |:endif|	:en[dif]	end previous :if
 |:endfor|	:endfo[r]	end previous :for
@@ -1303,6 +1344,7 @@ tag		command		action ~
 |:endtry|	:endt[ry]	end previous :try
 |:endwhile|	:endw[hile]	end previous :while
 |:enew|		:ene[w]		edit a new, unnamed buffer
+|:eval|		:ev[al]		evaluate an expression and discard the result
 |:ex|		:ex		same as ":edit"
 |:execute|	:exe[cute]	execute result of expressions
 |:exit|		:exi[t]		same as ":xit"
@@ -1313,6 +1355,7 @@ tag		command		action ~
 |:filetype|	:filet[ype]	switch file type detection on/off
 |:filter|	:filt[er]	filter output of following command
 |:find|		:fin[d]		find file in 'path' and edit it
+|:final|	:final		declare an immutable variable in Vim9
 |:finally|	:fina[lly]	part of a :try command
 |:finish|	:fini[sh]	quit sourcing a Vim script
 |:first|	:fir[st]	go to the first file in the argument list
@@ -1339,6 +1382,7 @@ tag		command		action ~
 |:highlight|	:hi[ghlight]	specify highlighting methods
 |:hide|		:hid[e]		hide current buffer for a command
 |:history|	:his[tory]	print a history list
+|:horizontal|	:hor[izontal]	following window command work horizontally
 |:insert|	:i[nsert]	insert text
 |:iabbrev|	:ia[bbrev]	like ":abbrev" but for Insert mode
 |:iabclear|	:iabc[lear]	like ":abclear" but for Insert mode
@@ -1389,6 +1433,7 @@ tag		command		action ~
 |:lfdo|		:lfd[o]		execute command in each file in location list
 |:left|		:le[ft]		left align lines
 |:leftabove|	:lefta[bove]	make split window appear left or above
+|:legacy|	:leg[acy]	make following command use legacy script syntax
 |:let|		:let		assign a value to a variable or option
 |:lexpr|	:lex[pr]	read locations from expr and jump to first
 |:lfile|	:lf[ile]	read file with locations and jump to first
@@ -1508,6 +1553,7 @@ tag		command		action ~
 |:ptprevious|	:ptp[revious]	|:tprevious| in preview window
 |:ptrewind|	:ptr[ewind]	|:trewind| in preview window
 |:ptselect|	:pts[elect]	|:tselect| and show tag in preview window
+|:public|	:public		prefix for a class or object member
 |:put|		:pu[t]		insert contents of register in the text
 |:pwd|		:pw[d]		print current directory
 |:py3|		:py3		execute Python 3 command
@@ -1585,6 +1631,8 @@ tag		command		action ~
 |:sign|		:sig[n]		manipulate signs
 |:silent|	:sil[ent]	run a command silently
 |:sleep|	:sl[eep]	do nothing for a few seconds
+|:sleep!|	:sl[eep]!	do nothing for a few seconds, without the
+				cursor visible
 |:slast|	:sla[st]	split window and go to last file in the
 				argument list
 |:smagic|	:sm[agic]	:substitute with 'magic'
@@ -1616,6 +1664,7 @@ tag		command		action ~
 |:startinsert|	:star[tinsert]	start Insert mode
 |:startgreplace|  :startg[replace] start Virtual Replace mode
 |:startreplace|	:startr[eplace]	start Replace mode
+|:static|	:static		prefix for a class member or function
 |:stopinsert|	:stopi[nsert]	stop Insert mode
 |:stjump|	:stj[ump]	do ":tjump" and split window
 |:stselect|	:sts[elect]	do ":tselect" and split window
@@ -1647,9 +1696,9 @@ tag		command		action ~
 |:tab|		:tab		create new tab when opening new window
 |:tag|		:ta[g]		jump to tag
 |:tags|		:tags		show the contents of the tag stack
-|:tcd|		:tcd		change directory for tab page
+|:tcd|		:tc[d]		change directory for tab page
 |:tchdir|	:tch[dir]	change directory for tab page
-|:tcl|		:tc[l]		execute Tcl command
+|:tcl|		:tcl		execute Tcl command
 |:tcldo|	:tcld[o]	execute Tcl command for each line
 |:tclfile|	:tclf[ile]	execute Tcl script file
 |:tearoff|	:te[aroff]	tear-off a menu
@@ -1687,10 +1736,12 @@ tag		command		action ~
 |:unsilent|	:uns[ilent]	run a command not silently
 |:update|	:up[date]	write buffer if modified
 |:vglobal|	:v[global]	execute commands for not matching lines
+|:var|		:var		variable declaration in Vim9
 |:version|	:ve[rsion]	print version number and other info
 |:verbose|	:verb[ose]	execute command with 'verbose' set
 |:vertical|	:vert[ical]	make following command split vertically
-|:vim9script|	:vim9[script]	indicates Vim9 script file
+|:vim9cmd|	:vim9[cmd]	make following command use Vim9 script syntax
+|:vim9script|	:vim9s[cript]	indicates Vim9 script file
 |:vimgrep|	:vim[grep]	search for pattern in files
 |:vimgrepadd|	:vimgrepa[dd]	like :vimgrep, but append to current list
 |:visual|	:vi[sual]	same as ":edit", but turns off "Ex" mode

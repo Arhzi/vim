@@ -27,10 +27,8 @@ autowrite(buf_T *buf, int forceit)
     bufref_T	bufref;
 
     if (!(p_aw || p_awa) || !p_write
-#ifdef FEAT_QUICKFIX
 	    // never autowrite a "nofile" or "nowrite" buffer
 	    || bt_dontwrite(buf)
-#endif
 	    || (!forceit && buf->b_p_ro) || buf->b_ffname == NULL)
 	return FAIL;
     set_bufref(&bufref, buf);
@@ -86,8 +84,15 @@ check_changed(buf_T *buf, int flags)
 	    && (!(flags & CCGD_AW) || autowrite(buf, forceit) == FAIL))
     {
 #if defined(FEAT_GUI_DIALOG) || defined(FEAT_CON_DIALOG)
-	if ((p_confirm || cmdmod.confirm) && p_write)
+	if ((p_confirm || (cmdmod.cmod_flags & CMOD_CONFIRM)) && p_write)
 	{
+# ifdef FEAT_TERMINAL
+	    if (term_job_running(buf->b_term))
+	    {
+		return term_confirm_stop(buf) == FAIL;
+	    }
+# endif
+
 	    buf_T	*buf2;
 	    int		count = 0;
 
@@ -96,7 +101,7 @@ check_changed(buf_T *buf, int flags)
 		    if (bufIsChanged(buf2)
 				     && (buf2->b_ffname != NULL
 # ifdef FEAT_BROWSE
-					 || cmdmod.browse
+					 || (cmdmod.cmod_flags & CMOD_BROWSE)
 # endif
 					))
 			++count;
@@ -130,19 +135,19 @@ check_changed(buf_T *buf, int flags)
     void
 browse_save_fname(buf_T *buf)
 {
-    if (buf->b_fname == NULL)
-    {
-	char_u *fname;
+    if (buf->b_fname != NULL)
+	return;
 
-	fname = do_browse(BROWSE_SAVE, (char_u *)_("Save As"),
-						 NULL, NULL, NULL, NULL, buf);
-	if (fname != NULL)
-	{
-	    if (setfname(buf, fname, NULL, TRUE) == OK)
-		buf->b_flags |= BF_NOTEDITED;
-	    vim_free(fname);
-	}
-    }
+    char_u *fname;
+
+    fname = do_browse(BROWSE_SAVE, (char_u *)_("Save As"),
+	    NULL, NULL, NULL, NULL, buf);
+    if (fname == NULL)
+	return;
+
+    if (setfname(buf, fname, NULL, TRUE) == OK)
+	buf->b_flags |= BF_NOTEDITED;
+    vim_free(fname);
 }
 #endif
 
@@ -158,7 +163,7 @@ dialog_changed(
     char_u	buff[DIALOG_MSG_SIZE];
     int		ret;
     buf_T	*buf2;
-    exarg_T     ea;
+    exarg_T	ea;
 
     dialog_msg(buff, _("Save changes to \"%s\"?"), buf->b_fname);
     if (checkall)
@@ -172,14 +177,31 @@ dialog_changed(
 
     if (ret == VIM_YES)
     {
+	int	empty_bufname;
+
 #ifdef FEAT_BROWSE
 	// May get file name, when there is none
 	browse_save_fname(buf);
 #endif
-	if (buf->b_fname != NULL && check_overwrite(&ea, buf,
-				    buf->b_fname, buf->b_ffname, FALSE) == OK)
+	empty_bufname = buf->b_fname == NULL ? TRUE : FALSE;
+	if (empty_bufname)
+	    buf_set_name(buf->b_fnum, (char_u *)"Untitled");
+
+	if (check_overwrite(&ea, buf, buf->b_fname, buf->b_ffname, FALSE) == OK)
+	{
 	    // didn't hit Cancel
-	    (void)buf_write_all(buf, FALSE);
+	    if (buf_write_all(buf, FALSE) == OK)
+		return;
+	}
+
+	// restore to empty when write failed
+	if (empty_bufname)
+	{
+	    buf->b_fname = NULL;
+	    VIM_CLEAR(buf->b_ffname);
+	    VIM_CLEAR(buf->b_sfname);
+	    unchanged(buf, TRUE, FALSE);
+	}
     }
     else if (ret == VIM_NO)
     {
@@ -197,9 +219,10 @@ dialog_changed(
 	    if (bufIsChanged(buf2)
 		    && (buf2->b_ffname != NULL
 #ifdef FEAT_BROWSE
-			|| cmdmod.browse
+			|| (cmdmod.cmod_flags & CMOD_BROWSE)
 #endif
 			)
+		    && !bt_dontwrite(buf2)
 		    && !buf2->b_p_ro)
 	    {
 		bufref_T bufref;
@@ -347,10 +370,10 @@ check_changed_any(
     /*
      * When ":confirm" used, don't give an error message.
      */
-    if (!(p_confirm || cmdmod.confirm))
+    if (!(p_confirm || (cmdmod.cmod_flags & CMOD_CONFIRM)))
 #endif
     {
-	// There must be a wait_return for this message, do_buffer()
+	// There must be a wait_return() for this message, do_buffer()
 	// may cause a redraw.  But wait_return() is a no-op when vgetc()
 	// is busy (Quit used from window menu), then make sure we don't
 	// cause a scroll up.
@@ -363,11 +386,10 @@ check_changed_any(
 	if (
 #ifdef FEAT_TERMINAL
 		term_job_running(buf->b_term)
-		    ? semsg(_("E947: Job still running in buffer \"%s\""),
-								  buf->b_fname)
+		    ? semsg(_(e_job_still_running_in_buffer_str), buf->b_fname)
 		    :
 #endif
-		semsg(_("E162: No write since last change for buffer \"%s\""),
+		semsg(_(e_no_write_since_last_change_for_buffer_str),
 		    buf_spname(buf) != NULL ? buf_spname(buf) : buf->b_fname))
 	{
 	    save = no_wait_return;
@@ -413,7 +435,7 @@ check_fname(void)
 {
     if (curbuf->b_ffname == NULL)
     {
-	emsg(_(e_noname));
+	emsg(_(e_no_file_name));
 	return FAIL;
     }
     return OK;
@@ -452,10 +474,39 @@ ex_listdo(exarg_T *eap)
     tabpage_T	*tp;
     buf_T	*buf = curbuf;
     int		next_fnum = 0;
+
+    if (curwin->w_p_wfb)
+    {
+	if ((eap->cmdidx == CMD_ldo || eap->cmdidx == CMD_lfdo) &&
+		!eap->forceit)
+	{
+	    // Disallow :ldo if 'winfixbuf' is applied
+	    emsg(_(e_winfixbuf_cannot_go_to_buffer));
+	    return;
+	}
+
+	if (win_valid(prevwin) && !prevwin->w_p_wfb)
+	    // 'winfixbuf' is set; attempt to change to a window without it.
+	    win_goto(prevwin);
+	if (curwin->w_p_wfb)
+	{
+	    // Split the window, which will be 'nowinfixbuf', and set curwin to
+	    // that
+	    (void)win_split(0, 0);
+
+	    if (curwin->w_p_wfb)
+	    {
+		// Autocommands set 'winfixbuf' or sent us to another window
+		// with it set, or we failed to split the window.  Give up.
+		emsg(_(e_winfixbuf_cannot_go_to_buffer));
+		return;
+	    }
+	}
+    }
+
 #if defined(FEAT_SYN_HL)
     char_u	*save_ei = NULL;
 #endif
-    char_u	*p_shm_save;
 #ifdef FEAT_QUICKFIX
     int		qf_size = 0;
     int		qf_idx;
@@ -504,7 +555,7 @@ ex_listdo(exarg_T *eap)
 		    i++;
 		break;
 	    case CMD_tabdo:
-		for( ; tp != NULL && i + 1 < eap->line1; tp = tp->tp_next)
+		for ( ; tp != NULL && i + 1 < eap->line1; tp = tp->tp_next)
 		    i++;
 		break;
 	    case CMD_argdo:
@@ -536,7 +587,9 @@ ex_listdo(exarg_T *eap)
 		buf = NULL;
 	    else
 	    {
+		save_clear_shm_value();
 		ex_cc(eap);
+		restore_shm_value();
 
 		buf = curbuf;
 		i = eap->line1 - 1;
@@ -563,11 +616,9 @@ ex_listdo(exarg_T *eap)
 		{
 		    // Clear 'shm' to avoid that the file message overwrites
 		    // any output from the command.
-		    p_shm_save = vim_strsave(p_shm);
-		    set_option_value((char_u *)"shm", 0L, (char_u *)"", 0);
+		    save_clear_shm_value();
 		    do_argfile(eap, i);
-		    set_option_value((char_u *)"shm", 0L, p_shm_save, 0);
-		    vim_free(p_shm_save);
+		    restore_shm_value();
 		}
 		if (curwin->w_arg_idx != i)
 		    break;
@@ -606,7 +657,7 @@ ex_listdo(exarg_T *eap)
 	    ++i;
 
 	    // execute the command
-	    do_cmdline(eap->arg, eap->getline, eap->cookie,
+	    do_cmdline(eap->arg, eap->ea_getline, eap->cookie,
 						DOCMD_VERBOSE + DOCMD_NOWAIT);
 
 	    if (eap->cmdidx == CMD_bufdo)
@@ -623,11 +674,9 @@ ex_listdo(exarg_T *eap)
 
 		// Go to the next buffer.  Clear 'shm' to avoid that the file
 		// message overwrites any output from the command.
-		p_shm_save = vim_strsave(p_shm);
-		set_option_value((char_u *)"shm", 0L, (char_u *)"", 0);
+		save_clear_shm_value();
 		goto_buffer(eap, DOBUF_FIRST, FORWARD, next_fnum);
-		set_option_value((char_u *)"shm", 0L, p_shm_save, 0);
-		vim_free(p_shm_save);
+		restore_shm_value();
 
 		// If autocommands took us elsewhere, quit here.
 		if (curbuf->b_fnum != next_fnum)
@@ -643,13 +692,9 @@ ex_listdo(exarg_T *eap)
 
 		qf_idx = qf_get_cur_idx(eap);
 
-		// Clear 'shm' to avoid that the file message overwrites
-		// any output from the command.
-		p_shm_save = vim_strsave(p_shm);
-		set_option_value((char_u *)"shm", 0L, (char_u *)"", 0);
+		save_clear_shm_value();
 		ex_cnext(eap);
-		set_option_value((char_u *)"shm", 0L, p_shm_save, 0);
-		vim_free(p_shm_save);
+		restore_shm_value();
 
 		// If jumping to the next quickfix entry fails, quit here
 		if (qf_get_cur_idx(eap) == qf_idx)
@@ -698,9 +743,12 @@ ex_listdo(exarg_T *eap)
 		else
 		{
 		    aucmd_prepbuf(&aco, buf);
-		    apply_autocmds(EVENT_SYNTAX, buf->b_p_syn,
+		    if (curbuf == buf)
+		    {
+			apply_autocmds(EVENT_SYNTAX, buf->b_p_syn,
 						      buf->b_fname, TRUE, buf);
-		    aucmd_restbuf(&aco);
+			aucmd_restbuf(&aco);
+		    }
 		}
 
 		// start over, in case autocommands messed things up.
@@ -730,60 +778,59 @@ ex_compiler(exarg_T *eap)
 	// List all compiler scripts.
 	do_cmdline_cmd((char_u *)"echo globpath(&rtp, 'compiler/*.vim')");
 					// ) keep the indenter happy...
+	return;
+    }
+
+    buf = alloc(STRLEN(eap->arg) + 14);
+    if (buf == NULL)
+	return;
+
+    if (eap->forceit)
+    {
+	// ":compiler! {name}" sets global options
+	do_cmdline_cmd((char_u *)
+		"command -nargs=* CompilerSet set <args>");
     }
     else
     {
-	buf = alloc(STRLEN(eap->arg) + 14);
-	if (buf != NULL)
+	// ":compiler! {name}" sets local options.
+	// To remain backwards compatible "current_compiler" is always
+	// used.  A user's compiler plugin may set it, the distributed
+	// plugin will then skip the settings.  Afterwards set
+	// "b:current_compiler" and restore "current_compiler".
+	// Explicitly prepend "g:" to make it work in a function.
+	old_cur_comp = get_var_value((char_u *)"g:current_compiler");
+	if (old_cur_comp != NULL)
+	    old_cur_comp = vim_strsave(old_cur_comp);
+	do_cmdline_cmd((char_u *)
+		"command -nargs=* -keepscript CompilerSet setlocal <args>");
+    }
+    do_unlet((char_u *)"g:current_compiler", TRUE);
+    do_unlet((char_u *)"b:current_compiler", TRUE);
+
+    sprintf((char *)buf, "compiler/%s.vim", eap->arg);
+    if (source_runtime(buf, DIP_ALL) == FAIL)
+	semsg(_(e_compiler_not_supported_str), eap->arg);
+    vim_free(buf);
+
+    do_cmdline_cmd((char_u *)":delcommand CompilerSet");
+
+    // Set "b:current_compiler" from "current_compiler".
+    p = get_var_value((char_u *)"g:current_compiler");
+    if (p != NULL)
+	set_internal_string_var((char_u *)"b:current_compiler", p);
+
+    // Restore "current_compiler" for ":compiler {name}".
+    if (!eap->forceit)
+    {
+	if (old_cur_comp != NULL)
 	{
-	    if (eap->forceit)
-	    {
-		// ":compiler! {name}" sets global options
-		do_cmdline_cmd((char_u *)
-				   "command -nargs=* CompilerSet set <args>");
-	    }
-	    else
-	    {
-		// ":compiler! {name}" sets local options.
-		// To remain backwards compatible "current_compiler" is always
-		// used.  A user's compiler plugin may set it, the distributed
-		// plugin will then skip the settings.  Afterwards set
-		// "b:current_compiler" and restore "current_compiler".
-		// Explicitly prepend "g:" to make it work in a function.
-		old_cur_comp = get_var_value((char_u *)"g:current_compiler");
-		if (old_cur_comp != NULL)
-		    old_cur_comp = vim_strsave(old_cur_comp);
-		do_cmdline_cmd((char_u *)
-			      "command -nargs=* CompilerSet setlocal <args>");
-	    }
-	    do_unlet((char_u *)"g:current_compiler", TRUE);
-	    do_unlet((char_u *)"b:current_compiler", TRUE);
-
-	    sprintf((char *)buf, "compiler/%s.vim", eap->arg);
-	    if (source_runtime(buf, DIP_ALL) == FAIL)
-		semsg(_("E666: compiler not supported: %s"), eap->arg);
-	    vim_free(buf);
-
-	    do_cmdline_cmd((char_u *)":delcommand CompilerSet");
-
-	    // Set "b:current_compiler" from "current_compiler".
-	    p = get_var_value((char_u *)"g:current_compiler");
-	    if (p != NULL)
-		set_internal_string_var((char_u *)"b:current_compiler", p);
-
-	    // Restore "current_compiler" for ":compiler {name}".
-	    if (!eap->forceit)
-	    {
-		if (old_cur_comp != NULL)
-		{
-		    set_internal_string_var((char_u *)"g:current_compiler",
-								old_cur_comp);
-		    vim_free(old_cur_comp);
-		}
-		else
-		    do_unlet((char_u *)"g:current_compiler", TRUE);
-	    }
+	    set_internal_string_var((char_u *)"g:current_compiler",
+		    old_cur_comp);
+	    vim_free(old_cur_comp);
 	}
+	else
+	    do_unlet((char_u *)"g:current_compiler", TRUE);
     }
 }
 #endif
@@ -828,40 +875,40 @@ requires_py_version(char_u *filename)
 	lines = 5;
 
     file = mch_fopen((char *)filename, "r");
-    if (file != NULL)
+    if (file == NULL)
+	return 0;
+
+    for (i = 0; i < lines; i++)
     {
-	for (i = 0; i < lines; i++)
+	if (vim_fgets(IObuff, IOSIZE, file))
+	    break;
+	if (i == 0 && IObuff[0] == '#' && IObuff[1] == '!')
 	{
-	    if (vim_fgets(IObuff, IOSIZE, file))
-		break;
-	    if (i == 0 && IObuff[0] == '#' && IObuff[1] == '!')
-	    {
-		// Check shebang.
-		if (strstr((char *)IObuff + 2, "python2") != NULL)
-		{
-		    requires_py_version = 2;
-		    break;
-		}
-		if (strstr((char *)IObuff + 2, "python3") != NULL)
-		{
-		    requires_py_version = 3;
-		    break;
-		}
-	    }
-	    IObuff[21] = '\0';
-	    if (STRCMP("# requires python 2.x", IObuff) == 0)
+	    // Check shebang.
+	    if (strstr((char *)IObuff + 2, "python2") != NULL)
 	    {
 		requires_py_version = 2;
 		break;
 	    }
-	    if (STRCMP("# requires python 3.x", IObuff) == 0)
+	    if (strstr((char *)IObuff + 2, "python3") != NULL)
 	    {
 		requires_py_version = 3;
 		break;
 	    }
 	}
-	fclose(file);
+	IObuff[21] = '\0';
+	if (STRCMP("# requires python 2.x", IObuff) == 0)
+	{
+	    requires_py_version = 2;
+	    break;
+	}
+	if (STRCMP("# requires python 3.x", IObuff) == 0)
+	{
+	    requires_py_version = 3;
+	    break;
+	}
     }
+    fclose(file);
     return requires_py_version;
 }
 
@@ -996,489 +1043,3 @@ ex_checktime(exarg_T *eap)
     }
     no_check_timestamps = save_no_check_timestamps;
 }
-
-#if (defined(HAVE_LOCALE_H) || defined(X_LOCALE)) \
-	&& (defined(FEAT_EVAL) || defined(FEAT_MULTI_LANG))
-# define HAVE_GET_LOCALE_VAL
-    static char_u *
-get_locale_val(int what)
-{
-    char_u	*loc;
-
-    // Obtain the locale value from the libraries.
-    loc = (char_u *)setlocale(what, NULL);
-
-# ifdef MSWIN
-    if (loc != NULL)
-    {
-	char_u	*p;
-
-	// setocale() returns something like "LC_COLLATE=<name>;LC_..." when
-	// one of the values (e.g., LC_CTYPE) differs.
-	p = vim_strchr(loc, '=');
-	if (p != NULL)
-	{
-	    loc = ++p;
-	    while (*p != NUL)	// remove trailing newline
-	    {
-		if (*p < ' ' || *p == ';')
-		{
-		    *p = NUL;
-		    break;
-		}
-		++p;
-	    }
-	}
-    }
-# endif
-
-    return loc;
-}
-#endif
-
-
-#ifdef MSWIN
-/*
- * On MS-Windows locale names are strings like "German_Germany.1252", but
- * gettext expects "de".  Try to translate one into another here for a few
- * supported languages.
- */
-    static char_u *
-gettext_lang(char_u *name)
-{
-    int		i;
-    static char *(mtable[]) = {
-			"afrikaans",	"af",
-			"czech",	"cs",
-			"dutch",	"nl",
-			"german",	"de",
-			"english_united kingdom", "en_GB",
-			"spanish",	"es",
-			"french",	"fr",
-			"italian",	"it",
-			"japanese",	"ja",
-			"korean",	"ko",
-			"norwegian",	"no",
-			"polish",	"pl",
-			"russian",	"ru",
-			"slovak",	"sk",
-			"swedish",	"sv",
-			"ukrainian",	"uk",
-			"chinese_china", "zh_CN",
-			"chinese_taiwan", "zh_TW",
-			NULL};
-
-    for (i = 0; mtable[i] != NULL; i += 2)
-	if (STRNICMP(mtable[i], name, STRLEN(mtable[i])) == 0)
-	    return (char_u *)mtable[i + 1];
-    return name;
-}
-#endif
-
-#if defined(FEAT_MULTI_LANG) || defined(PROTO)
-/*
- * Return TRUE when "lang" starts with a valid language name.
- * Rejects NULL, empty string, "C", "C.UTF-8" and others.
- */
-    static int
-is_valid_mess_lang(char_u *lang)
-{
-    return lang != NULL && ASCII_ISALPHA(lang[0]) && ASCII_ISALPHA(lang[1]);
-}
-
-/*
- * Obtain the current messages language.  Used to set the default for
- * 'helplang'.  May return NULL or an empty string.
- */
-    char_u *
-get_mess_lang(void)
-{
-    char_u *p;
-
-# ifdef HAVE_GET_LOCALE_VAL
-#  if defined(LC_MESSAGES)
-    p = get_locale_val(LC_MESSAGES);
-#  else
-    // This is necessary for Win32, where LC_MESSAGES is not defined and $LANG
-    // may be set to the LCID number.  LC_COLLATE is the best guess, LC_TIME
-    // and LC_MONETARY may be set differently for a Japanese working in the
-    // US.
-    p = get_locale_val(LC_COLLATE);
-#  endif
-# else
-    p = mch_getenv((char_u *)"LC_ALL");
-    if (!is_valid_mess_lang(p))
-    {
-	p = mch_getenv((char_u *)"LC_MESSAGES");
-	if (!is_valid_mess_lang(p))
-	    p = mch_getenv((char_u *)"LANG");
-    }
-# endif
-# ifdef MSWIN
-    p = gettext_lang(p);
-# endif
-    return is_valid_mess_lang(p) ? p : NULL;
-}
-#endif
-
-// Complicated #if; matches with where get_mess_env() is used below.
-#if (defined(FEAT_EVAL) && !((defined(HAVE_LOCALE_H) || defined(X_LOCALE)) \
-	    && defined(LC_MESSAGES))) \
-	|| ((defined(HAVE_LOCALE_H) || defined(X_LOCALE)) \
-		&& !defined(LC_MESSAGES))
-/*
- * Get the language used for messages from the environment.
- */
-    static char_u *
-get_mess_env(void)
-{
-    char_u	*p;
-
-    p = mch_getenv((char_u *)"LC_ALL");
-    if (p == NULL || *p == NUL)
-    {
-	p = mch_getenv((char_u *)"LC_MESSAGES");
-	if (p == NULL || *p == NUL)
-	{
-	    p = mch_getenv((char_u *)"LANG");
-	    if (p != NULL && VIM_ISDIGIT(*p))
-		p = NULL;		// ignore something like "1043"
-# ifdef HAVE_GET_LOCALE_VAL
-	    if (p == NULL || *p == NUL)
-		p = get_locale_val(LC_CTYPE);
-# endif
-	}
-    }
-    return p;
-}
-#endif
-
-#if defined(FEAT_EVAL) || defined(PROTO)
-
-/*
- * Set the "v:lang" variable according to the current locale setting.
- * Also do "v:lc_time"and "v:ctype".
- */
-    void
-set_lang_var(void)
-{
-    char_u	*loc;
-
-# ifdef HAVE_GET_LOCALE_VAL
-    loc = get_locale_val(LC_CTYPE);
-# else
-    // setlocale() not supported: use the default value
-    loc = (char_u *)"C";
-# endif
-    set_vim_var_string(VV_CTYPE, loc, -1);
-
-    // When LC_MESSAGES isn't defined use the value from $LC_MESSAGES, fall
-    // back to LC_CTYPE if it's empty.
-# if defined(HAVE_GET_LOCALE_VAL) && defined(LC_MESSAGES)
-    loc = get_locale_val(LC_MESSAGES);
-# else
-    loc = get_mess_env();
-# endif
-    set_vim_var_string(VV_LANG, loc, -1);
-
-# ifdef HAVE_GET_LOCALE_VAL
-    loc = get_locale_val(LC_TIME);
-# endif
-    set_vim_var_string(VV_LC_TIME, loc, -1);
-}
-#endif
-
-#if defined(HAVE_LOCALE_H) || defined(X_LOCALE)
-/*
- * ":language":  Set the language (locale).
- */
-    void
-ex_language(exarg_T *eap)
-{
-    char	*loc;
-    char_u	*p;
-    char_u	*name;
-    int		what = LC_ALL;
-    char	*whatstr = "";
-# ifdef LC_MESSAGES
-#  define VIM_LC_MESSAGES LC_MESSAGES
-# else
-#  define VIM_LC_MESSAGES 6789
-# endif
-
-    name = eap->arg;
-
-    // Check for "messages {name}", "ctype {name}" or "time {name}" argument.
-    // Allow abbreviation, but require at least 3 characters to avoid
-    // confusion with a two letter language name "me" or "ct".
-    p = skiptowhite(eap->arg);
-    if ((*p == NUL || VIM_ISWHITE(*p)) && p - eap->arg >= 3)
-    {
-	if (STRNICMP(eap->arg, "messages", p - eap->arg) == 0)
-	{
-	    what = VIM_LC_MESSAGES;
-	    name = skipwhite(p);
-	    whatstr = "messages ";
-	}
-	else if (STRNICMP(eap->arg, "ctype", p - eap->arg) == 0)
-	{
-	    what = LC_CTYPE;
-	    name = skipwhite(p);
-	    whatstr = "ctype ";
-	}
-	else if (STRNICMP(eap->arg, "time", p - eap->arg) == 0)
-	{
-	    what = LC_TIME;
-	    name = skipwhite(p);
-	    whatstr = "time ";
-	}
-    }
-
-    if (*name == NUL)
-    {
-# ifndef LC_MESSAGES
-	if (what == VIM_LC_MESSAGES)
-	    p = get_mess_env();
-	else
-# endif
-	    p = (char_u *)setlocale(what, NULL);
-	if (p == NULL || *p == NUL)
-	    p = (char_u *)"Unknown";
-	smsg(_("Current %slanguage: \"%s\""), whatstr, p);
-    }
-    else
-    {
-# ifndef LC_MESSAGES
-	if (what == VIM_LC_MESSAGES)
-	    loc = "";
-	else
-# endif
-	{
-	    loc = setlocale(what, (char *)name);
-# if defined(FEAT_FLOAT) && defined(LC_NUMERIC)
-	    // Make sure strtod() uses a decimal point, not a comma.
-	    setlocale(LC_NUMERIC, "C");
-# endif
-	}
-	if (loc == NULL)
-	    semsg(_("E197: Cannot set language to \"%s\""), name);
-	else
-	{
-# ifdef HAVE_NL_MSG_CAT_CNTR
-	    // Need to do this for GNU gettext, otherwise cached translations
-	    // will be used again.
-	    extern int _nl_msg_cat_cntr;
-
-	    ++_nl_msg_cat_cntr;
-# endif
-	    // Reset $LC_ALL, otherwise it would overrule everything.
-	    vim_setenv((char_u *)"LC_ALL", (char_u *)"");
-
-	    if (what != LC_TIME)
-	    {
-		// Tell gettext() what to translate to.  It apparently doesn't
-		// use the currently effective locale.  Also do this when
-		// FEAT_GETTEXT isn't defined, so that shell commands use this
-		// value.
-		if (what == LC_ALL)
-		{
-		    vim_setenv((char_u *)"LANG", name);
-
-		    // Clear $LANGUAGE because GNU gettext uses it.
-		    vim_setenv((char_u *)"LANGUAGE", (char_u *)"");
-# ifdef MSWIN
-		    // Apparently MS-Windows printf() may cause a crash when
-		    // we give it 8-bit text while it's expecting text in the
-		    // current locale.  This call avoids that.
-		    setlocale(LC_CTYPE, "C");
-# endif
-		}
-		if (what != LC_CTYPE)
-		{
-		    char_u	*mname;
-# ifdef MSWIN
-		    mname = gettext_lang(name);
-# else
-		    mname = name;
-# endif
-		    vim_setenv((char_u *)"LC_MESSAGES", mname);
-# ifdef FEAT_MULTI_LANG
-		    set_helplang_default(mname);
-# endif
-		}
-	    }
-
-# ifdef FEAT_EVAL
-	    // Set v:lang, v:lc_time and v:ctype to the final result.
-	    set_lang_var();
-# endif
-# ifdef FEAT_TITLE
-	    maketitle();
-# endif
-	}
-    }
-}
-
-static char_u	**locales = NULL;	// Array of all available locales
-
-static int	did_init_locales = FALSE;
-
-/*
- * Return an array of strings for all available locales + NULL for the
- * last element.  Return NULL in case of error.
- */
-    static char_u **
-find_locales(void)
-{
-    garray_T	locales_ga;
-    char_u	*loc;
-    char_u	*locale_list;
-# ifdef MSWIN
-    size_t	len = 0;
-# endif
-
-    // Find all available locales by running command "locale -a".  If this
-    // doesn't work we won't have completion.
-# ifndef MSWIN
-    locale_list = get_cmd_output((char_u *)"locale -a",
-						    NULL, SHELL_SILENT, NULL);
-# else
-    // Find all available locales by examining the directories in
-    // $VIMRUNTIME/lang/
-    {
-	int		options = WILD_SILENT|WILD_USE_NL|WILD_KEEP_ALL;
-	expand_T	xpc;
-	char_u		*p;
-
-	ExpandInit(&xpc);
-	xpc.xp_context = EXPAND_DIRECTORIES;
-	locale_list = ExpandOne(&xpc, (char_u *)"$VIMRUNTIME/lang/*",
-						      NULL, options, WILD_ALL);
-	ExpandCleanup(&xpc);
-	if (locale_list == NULL)
-	    // Add a dummy input, that will be skipped lated but we need to
-	    // have something in locale_list so that the C locale is added at
-	    // the end.
-	    locale_list = vim_strsave((char_u *)".\n");
-	p = locale_list;
-	// find the last directory delimiter
-	while (p != NULL && *p != NUL)
-	{
-	    if (*p == '\n')
-		break;
-	    if (*p == '\\')
-		len = p - locale_list;
-	    p++;
-	}
-    }
-# endif
-    if (locale_list == NULL)
-	return NULL;
-    ga_init2(&locales_ga, sizeof(char_u *), 20);
-
-    // Transform locale_list string where each locale is separated by "\n"
-    // into an array of locale strings.
-    loc = (char_u *)strtok((char *)locale_list, "\n");
-
-    while (loc != NULL)
-    {
-	int ignore = FALSE;
-
-# ifdef MSWIN
-	if (len > 0)
-	    loc += len + 1;
-	// skip locales with a dot (which indicates the charset)
-	if (vim_strchr(loc, '.') != NULL)
-	    ignore = TRUE;
-# endif
-	if (!ignore)
-	{
-	    if (ga_grow(&locales_ga, 1) == FAIL)
-		break;
-
-	    loc = vim_strsave(loc);
-	    if (loc == NULL)
-		break;
-
-	    ((char_u **)locales_ga.ga_data)[locales_ga.ga_len++] = loc;
-	}
-	loc = (char_u *)strtok(NULL, "\n");
-    }
-
-# ifdef MSWIN
-    // Add the C locale
-    if (ga_grow(&locales_ga, 1) == OK)
-	((char_u **)locales_ga.ga_data)[locales_ga.ga_len++] =
-						    vim_strsave((char_u *)"C");
-# endif
-
-    vim_free(locale_list);
-    if (ga_grow(&locales_ga, 1) == FAIL)
-    {
-	ga_clear(&locales_ga);
-	return NULL;
-    }
-    ((char_u **)locales_ga.ga_data)[locales_ga.ga_len] = NULL;
-    return (char_u **)locales_ga.ga_data;
-}
-
-/*
- * Lazy initialization of all available locales.
- */
-    static void
-init_locales(void)
-{
-    if (!did_init_locales)
-    {
-	did_init_locales = TRUE;
-	locales = find_locales();
-    }
-}
-
-# if defined(EXITFREE) || defined(PROTO)
-    void
-free_locales(void)
-{
-    int			i;
-    if (locales != NULL)
-    {
-	for (i = 0; locales[i] != NULL; i++)
-	    vim_free(locales[i]);
-	VIM_CLEAR(locales);
-    }
-}
-# endif
-
-/*
- * Function given to ExpandGeneric() to obtain the possible arguments of the
- * ":language" command.
- */
-    char_u *
-get_lang_arg(expand_T *xp UNUSED, int idx)
-{
-    if (idx == 0)
-	return (char_u *)"messages";
-    if (idx == 1)
-	return (char_u *)"ctype";
-    if (idx == 2)
-	return (char_u *)"time";
-
-    init_locales();
-    if (locales == NULL)
-	return NULL;
-    return locales[idx - 3];
-}
-
-/*
- * Function given to ExpandGeneric() to obtain the available locales.
- */
-    char_u *
-get_locales(expand_T *xp UNUSED, int idx)
-{
-    init_locales();
-    if (locales == NULL)
-	return NULL;
-    return locales[idx];
-}
-
-#endif

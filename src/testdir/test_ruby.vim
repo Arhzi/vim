@@ -11,10 +11,25 @@ func Test_ruby_change_buffer()
 endfunc
 
 func Test_rubydo()
-  " Check deleting lines does not trigger ml_get error.
   new
+
+  " Check deleting lines does not trigger ml_get error.
   call setline(1, ['one', 'two', 'three'])
   rubydo Vim.command("%d_")
+  call assert_equal(['one'], getline(1, '$'))
+
+  call setline(1, ['one', 'two', 'three'])
+  rubydo Vim.command("1,2d_")
+  call assert_equal(['one'], getline(1, '$'))
+
+  call setline(1, ['one', 'two', 'three'])
+  rubydo Vim.command("2,3d_"); $_ = "REPLACED"
+  call assert_equal(['REPLACED'], getline(1, '$'))
+
+  call setline(1, ['one', 'two', 'three'])
+  2,3rubydo Vim.command("1,2d_"); $_ = "REPLACED"
+  call assert_equal(['three'], getline(1, '$'))
+
   bwipe!
 
   " Check switching to another buffer does not trigger ml_get error.
@@ -24,6 +39,18 @@ func Test_rubydo()
   rubydo Vim.command("new")
   call assert_equal(wincount + 1, winnr('$'))
   %bwipe!
+endfunc
+
+func Test_rubydo_dollar_underscore()
+  new
+  call setline(1, ['one', 'two', 'three', 'four'])
+  2,3rubydo $_ = '[' + $_  + ']'
+  call assert_equal(['one', '[two]', '[three]', 'four'], getline(1, '$'))
+  bwipe!
+
+  call assert_fails('rubydo $_ = 0', 'E265:')
+  call assert_fails('rubydo (')
+  bwipe!
 endfunc
 
 func Test_rubyfile()
@@ -263,7 +290,7 @@ func Test_ruby_Vim_buffer_get()
   call assert_match('Xfoo1$', rubyeval('Vim::Buffer[1].name'))
   call assert_match('Xfoo2$', rubyeval('Vim::Buffer[2].name'))
   call assert_fails('ruby print Vim::Buffer[3].name',
-        \           "NoMethodError: undefined method `name' for nil:NilClass")
+        \           "NoMethodError: undefined method `name' for nil")
   %bwipe
 endfunc
 
@@ -292,10 +319,8 @@ func Test_ruby_Vim_evaluate()
   " on versions of Ruby.
   call assert_match('^Integer\|Fixnum$', rubyeval('Vim::evaluate("123").class'))
 
-  if has('float')
-    call assert_equal(1.23,       rubyeval('Vim::evaluate("1.23")'))
-    call assert_equal('Float',    rubyeval('Vim::evaluate("1.23").class'))
-  endif
+  call assert_equal(1.23,       rubyeval('Vim::evaluate("1.23")'))
+  call assert_equal('Float',    rubyeval('Vim::evaluate("1.23").class'))
 
   call assert_equal('foo',      rubyeval('Vim::evaluate("\"foo\"")'))
   call assert_equal('String',   rubyeval('Vim::evaluate("\"foo\"").class'))
@@ -393,6 +418,15 @@ func Test_ruby_p()
 
   let messages = GetMessages()
   call assert_equal(0, len(messages))
+endfunc
+
+func Test_rubyeval_error()
+  " On Linux or Windows the error matches:
+  "   "syntax error, unexpected end-of-input"
+  " whereas on macOS in CI, the error message makes less sense:
+  "   "SyntaxError: array length must be 2"
+  " Unclear why. The test does not check the error message.
+  call assert_fails('call rubyeval("(")')
 endfunc
 
 " Test for various heredoc syntax

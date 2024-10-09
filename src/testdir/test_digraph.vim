@@ -2,6 +2,7 @@
 
 source check.vim
 CheckFeature digraphs
+source term_util.vim
 
 func Put_Dig(chars)
   exe "norm! o\<c-k>".a:chars
@@ -36,6 +37,9 @@ func Test_digraphs()
   call Put_Dig("=P")
   call Put_Dig("P=")
   call assert_equal(['Р']+repeat(["₽"],2)+['П'], getline(line('.')-3,line('.')))
+  " Quadruple prime
+  call Put_Dig("'4")
+  call assert_equal("⁗", getline('.'))
   " Not a digraph
   call Put_Dig("a\<bs>")
   call Put_Dig("\<bs>a")
@@ -50,7 +54,7 @@ func Test_digraphs()
   call Put_Dig("'e")
   call Put_Dig("b'") " not defined
   call assert_equal(["á", "é", "'"], getline(line('.')-2,line('.')))
-  " Cicumflex
+  " Circumflex
   call Put_Dig("a>")
   call Put_Dig(">e")
   call Put_Dig("b>") " not defined
@@ -213,7 +217,7 @@ func Test_digraphs()
   call assert_fails('exe "digraph a\<Esc> 100"', 'E104:')
   call assert_fails('exe "digraph \<Esc>a 100"', 'E104:')
   call assert_fails('digraph xy z', 'E39:')
-  call assert_fails('digraph x', 'E474:')
+  call assert_fails('digraph x', 'E1214:')
   bw!
 endfunc
 
@@ -452,9 +456,7 @@ func Test_digraphs_output()
 endfunc
 
 func Test_loadkeymap()
-  if !has('keymap')
-    return
-  endif
+  CheckFeature keymap
   new
   set keymap=czech
   set iminsert=0
@@ -493,13 +495,116 @@ endfunc
 
 " Test for error in a keymap file
 func Test_loadkeymap_error()
-  if !has('keymap')
-    return
-  endif
+  CheckFeature keymap
   call assert_fails('loadkeymap', 'E105:')
-  call writefile(['loadkeymap', 'a'], 'Xkeymap')
+  call writefile(['loadkeymap', 'a'], 'Xkeymap', 'D')
   call assert_fails('source Xkeymap', 'E791:')
-  call delete('Xkeymap')
 endfunc
+
+" Test for the characters displayed on the screen when entering a digraph
+func Test_entering_digraph()
+  CheckRunVimInTerminal
+  let buf = RunVimInTerminal('', {'rows': 6})
+  call term_sendkeys(buf, "i\<C-K>")
+  call TermWait(buf)
+  call assert_equal('?', term_getline(buf, 1))
+  call term_sendkeys(buf, "1")
+  call TermWait(buf)
+  call assert_equal('1', term_getline(buf, 1))
+  call term_sendkeys(buf, "2")
+  call TermWait(buf)
+  call assert_equal('½', term_getline(buf, 1))
+  call StopVimInTerminal(buf)
+endfunc
+
+func Test_digraph_set_function()
+  new
+  call digraph_set('aa', 'あ')
+  call Put_Dig('aa')
+  call assert_equal('あ', getline('$'))
+  call digraph_set(' i', 'い')
+  call Put_Dig(' i')
+  call assert_equal('い', getline('$'))
+  call digraph_set('  ', 'う')
+  call Put_Dig('  ')
+  call assert_equal('う', getline('$'))
+
+  eval 'aa'->digraph_set('え')
+  call Put_Dig('aa')
+  call assert_equal('え', getline('$'))
+
+  call assert_fails('call digraph_set("aaa", "あ")', 'E1214: Digraph must be just two characters: aaa')
+  call assert_fails('call digraph_set("b", "あ")', 'E1214: Digraph must be just two characters: b')
+  call assert_fails('call digraph_set("あ", "あ")', 'E1214: Digraph must be just two characters: あ')
+  call assert_fails('call digraph_set("aa", "ああ")', 'E1215: Digraph must be one character: ああ')
+  call assert_fails('call digraph_set("aa", "か" .. nr2char(0x3099))',  'E1215: Digraph must be one character: か' .. nr2char(0x3099))
+  call assert_fails('call digraph_set(test_null_string(), "い")',  'E1214: Digraph must be just two characters')
+  call assert_fails('call digraph_set("aa", 0z10)',  'E976: Using a Blob as a String')
+  bwipe!
+endfunc
+
+func Test_digraph_get_function()
+  " Built-in digraphs
+  call assert_equal('∞', digraph_get('00'))
+
+  " User-defined digraphs
+  call digraph_set('aa', 'あ')
+  call digraph_set(' i', 'い')
+  call digraph_set('  ', 'う')
+  call assert_equal('あ', digraph_get('aa'))
+  call assert_equal('あ', 'aa'->digraph_get())
+  call assert_equal('い', digraph_get(' i'))
+  call assert_equal('う', digraph_get('  '))
+  call assert_fails('call digraph_get("aaa")', 'E1214: Digraph must be just two characters: aaa')
+  call assert_fails('call digraph_get("b")', 'E1214: Digraph must be just two characters: b')
+  call assert_fails('call digraph_get(test_null_string())', 'E1214: Digraph must be just two characters:')
+  call assert_fails('call digraph_get(0z10)', 'E976: Using a Blob as a String')
+endfunc
+
+func Test_digraph_get_function_encode()
+  CheckFeature iconv
+
+  let testcases = {
+        \'00': '∞',
+        \'aa': 'あ',
+        \}
+  for [key, ch] in items(testcases)
+    call digraph_set(key, ch)
+    set encoding=japan
+    call assert_equal(iconv(ch, 'utf-8', 'japan'), digraph_get(key))
+    set encoding=utf-8
+  endfor
+endfunc
+
+func Test_digraph_setlist_function()
+  call digraph_setlist([['aa', 'き'], ['bb', 'く']])
+  call assert_equal('き', digraph_get('aa'))
+  call assert_equal('く', digraph_get('bb'))
+
+  call assert_fails('call digraph_setlist([[]])', 'E1216:')
+  call assert_fails('call digraph_setlist([["aa", "b", "cc"]])', 'E1216:')
+  call assert_fails('call digraph_setlist([["あ", "あ"]])', 'E1214: Digraph must be just two characters: あ')
+  call assert_fails('call digraph_setlist([test_null_list()])', 'E1216:')
+  call assert_fails('call digraph_setlist({})', 'E1216:')
+  call assert_fails('call digraph_setlist([{}])', 'E1216:')
+  call assert_true(digraph_setlist(test_null_list()))
+endfunc
+
+func Test_digraph_getlist_function()
+  " Make sure user-defined digraphs are defined
+  call digraph_setlist([['aa', 'き'], ['bb', 'く']])
+
+  for pair in digraph_getlist(1)
+    call assert_equal(pair[1], digraph_get(pair[0]))
+  endfor
+
+  " We don't know how many digraphs are registered before, so check the number
+  " of digraphs returned.
+  call assert_equal(digraph_getlist()->len(), digraph_getlist(0)->len())
+  call assert_notequal(digraph_getlist()->len(), digraph_getlist(1)->len())
+
+  call assert_fails('call digraph_getlist(0z12)', 'E974: Using a Blob as a Number')
+endfunc
+
 
 " vim: shiftwidth=2 sts=2 expandtab

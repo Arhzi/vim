@@ -1,4 +1,5 @@
 " Tests for the preview window
+
 source check.vim
 CheckFeature quickfix
 
@@ -25,6 +26,7 @@ func Test_window_preview()
   " Go to the preview window
   wincmd P
   call assert_equal(1, &previewwindow)
+  call assert_equal('preview', win_gettype())
 
   " Close preview window
   wincmd z
@@ -38,7 +40,7 @@ func Test_window_preview_from_help()
   CheckFeature quickfix
 
   filetype on
-  call writefile(['/* some C code */'], 'Xpreview.c')
+  call writefile(['/* some C code */'], 'Xpreview.c', 'D')
   help
   pedit Xpreview.c
   wincmd P
@@ -48,7 +50,6 @@ func Test_window_preview_from_help()
 
   filetype off
   close
-  call delete('Xpreview.c')
 endfunc
 
 func Test_multiple_preview_windows()

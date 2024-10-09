@@ -16,7 +16,7 @@ func ListMonths()
   if !empty(entered)
     let mth = filter(mth, 'v:val=~"^".entered')
   endif
-  call complete(1, mth) 
+  call complete(1, mth)
   return ''
 endfunc
 
@@ -74,7 +74,7 @@ func Test_popup_complete()
   call feedkeys("aJu\<f5>\<c-p>l\<c-y>", 'tx')
   call assert_equal(["Jul"], getline(1,2))
   %d
-  
+
   " any-non printable, non-white character: Add this character and
   " reduce number of matches
   call feedkeys("aJu\<f5>\<c-p>l\<c-n>\<c-y>", 'tx')
@@ -96,7 +96,7 @@ func Test_popup_complete()
   call feedkeys("aJ\<f5>".repeat("\<c-n>",3)."\<c-l>\<esc>", 'tx')
   call assert_equal(["J"], getline(1,2))
   %d
-  
+
   " <c-l> - Insert one character from the current match
   call feedkeys("aJ\<f5>".repeat("\<c-n>",4)."\<c-l>\<esc>", 'tx')
   call assert_equal(["January"], getline(1,2))
@@ -325,6 +325,21 @@ func Test_compl_vim_cmds_after_register_expr()
   bwipe!
 endfunc
 
+func Test_compl_ignore_mappings()
+  call setline(1, ['foo', 'bar', 'baz', 'foobar'])
+  inoremap <C-P> (C-P)
+  inoremap <C-N> (C-N)
+  normal! G
+  call feedkeys("o\<C-X>\<C-N>\<C-N>\<C-N>\<C-P>\<C-N>\<C-Y>", 'tx')
+  call assert_equal('baz', getline('.'))
+  " Also test with unsimplified keys
+  call feedkeys("o\<C-X>\<*C-N>\<*C-N>\<*C-N>\<*C-P>\<*C-N>\<C-Y>", 'tx')
+  call assert_equal('baz', getline('.'))
+  iunmap <C-P>
+  iunmap <C-N>
+  bwipe!
+endfunc
+
 func DummyCompleteOne(findstart, base)
   if a:findstart
     return 0
@@ -342,9 +357,9 @@ func Test_completefunc_opens_new_window_one()
   setlocal completefunc=DummyCompleteOne
   call setline(1, 'one')
   /^one
-  call assert_fails('call feedkeys("A\<C-X>\<C-U>\<C-N>\<Esc>", "x")', 'E578:')
+  call assert_fails('call feedkeys("A\<C-X>\<C-U>\<C-N>\<Esc>", "x")', 'E565:')
   call assert_equal(winid, win_getid())
-  call assert_equal('oneDEF', getline(1))
+  call assert_equal('onedef', getline(1))
   q!
 endfunc
 
@@ -367,11 +382,9 @@ func Test_completefunc_opens_new_window_two()
   setlocal completefunc=DummyCompleteTwo
   call setline(1, 'two')
   /^two
-  call assert_fails('call feedkeys("A\<C-X>\<C-U>\<C-N>\<Esc>", "x")', 'E764:')
-  call assert_notequal(winid, win_getid())
-  q!
+  call assert_fails('call feedkeys("A\<C-X>\<C-U>\<C-N>\<Esc>", "x")', 'E565:')
   call assert_equal(winid, win_getid())
-  call assert_equal('two', getline(1))
+  call assert_equal('twodef', getline(1))
   q!
 endfunc
 
@@ -642,8 +655,8 @@ func Test_complete_func_mess()
   set completefunc=MessComplete
   new
   call setline(1, 'Ju')
-  call feedkeys("A\<c-x>\<c-u>/\<esc>", 'tx')
-  call assert_equal('Oct/Oct', getline(1))
+  call assert_fails('call feedkeys("A\<c-x>\<c-u>/\<esc>", "tx")', 'E565:')
+  call assert_equal('Jan/', getline(1))
   bwipe!
   set completefunc=
 endfunc
@@ -667,6 +680,7 @@ func Test_popup_and_window_resize()
   CheckFeature terminal
   CheckFeature quickfix
   CheckNotGui
+  let g:test_is_flaky = 1
 
   let h = winheight(0)
   if h < 15
@@ -744,7 +758,7 @@ func Test_popup_and_previewwindow_dump()
     call setline(1, map(repeat(["ab"], 10), "v:val .. v:key"))
     exec "norm! G\<C-E>\<C-E>"
   END
-  call writefile(lines, 'Xscript')
+  call writefile(lines, 'Xscript', 'D')
   let buf = RunVimInTerminal('-S Xscript', {})
 
   " wait for the script to finish
@@ -758,7 +772,6 @@ func Test_popup_and_previewwindow_dump()
 
   call term_sendkeys(buf, "\<Esc>u")
   call StopVimInTerminal(buf)
-  call delete('Xscript')
 endfunc
 
 func Test_balloon_split()
@@ -815,7 +828,7 @@ func Test_popup_position()
     123456789_123456789_123456789_b
                 123
   END
-  call writefile(lines, 'Xtest')
+  call writefile(lines, 'Xtest', 'D')
   let buf = RunVimInTerminal('Xtest', {})
   call term_sendkeys(buf, ":vsplit\<CR>")
 
@@ -843,14 +856,12 @@ func Test_popup_position()
   call term_sendkeys(buf, "jI123456789_\<Esc>")
   call term_sendkeys(buf, "GA\<C-N>")
   call VerifyScreenDump(buf, 'Test_popup_position_04', {'rows': 10})
-  
+
   call term_sendkeys(buf, "\<Esc>u")
   call StopVimInTerminal(buf)
-  call delete('Xtest')
 endfunc
 
 func Test_popup_command()
-  CheckScreendump
   CheckFeature menu
 
   menu Test.Foo Foo
@@ -858,19 +869,36 @@ func Test_popup_command()
   call assert_fails('popup Test.Foo.X', 'E327:')
   call assert_fails('popup Foo', 'E337:')
   unmenu Test.Foo
+endfunc
+
+func Test_popup_command_dump()
+  CheckFeature menu
+  CheckScreendump
+
+  let script =<< trim END
+    func StartTimer()
+      call timer_start(100, {-> ChangeMenu()})
+    endfunc
+    func ChangeMenu()
+      aunmenu PopUp.&Paste
+      nnoremenu 1.40 PopUp.&Paste :echomsg "pasted"<CR>
+      echomsg 'changed'
+    endfunc
+  END
+  call writefile(script, 'XtimerScript', 'D')
 
   let lines =<< trim END
 	one two three four five
 	and one two Xthree four five
 	one more two three four five
   END
-  call writefile(lines, 'Xtest')
-  let buf = RunVimInTerminal('Xtest', {})
+  call writefile(lines, 'Xtest', 'D')
+  let buf = RunVimInTerminal('-S XtimerScript Xtest', {})
   call term_sendkeys(buf, ":source $VIMRUNTIME/menu.vim\<CR>")
   call term_sendkeys(buf, "/X\<CR>:popup PopUp\<CR>")
   call VerifyScreenDump(buf, 'Test_popup_command_01', {})
 
-  " Select a word
+  " go to the Paste entry in the menu
   call term_sendkeys(buf, "jj")
   call VerifyScreenDump(buf, 'Test_popup_command_02', {})
 
@@ -879,8 +907,65 @@ func Test_popup_command()
   call VerifyScreenDump(buf, 'Test_popup_command_03', {})
 
   call term_sendkeys(buf, "\<Esc>")
+
+  if has('rightleft')
+    call term_sendkeys(buf, ":set rightleft\<CR>")
+    call term_sendkeys(buf, "/X\<CR>:popup PopUp\<CR>")
+    call VerifyScreenDump(buf, 'Test_popup_command_rl', {})
+    call term_sendkeys(buf, "\<Esc>:set norightleft\<CR>")
+  endif
+
+  " Set a timer to change a menu entry while it's displayed.  The text should
+  " not change but the command does.  Making the screendump also verifies that
+  " "changed" shows up, which means the timer triggered.
+  call term_sendkeys(buf, "/X\<CR>:call StartTimer() | popup PopUp\<CR>")
+  call VerifyScreenDump(buf, 'Test_popup_command_04', {})
+
+  " Select the Paste entry, executes the changed menu item.
+  call term_sendkeys(buf, "jj\<CR>")
+  call VerifyScreenDump(buf, 'Test_popup_command_05', {})
+
+  call term_sendkeys(buf, "\<Esc>")
+
+  " Add a window toolbar to the window and check the :popup menu position.
+  call term_sendkeys(buf, ":nnoremenu WinBar.TEST :\<CR>")
+  call term_sendkeys(buf, "/X\<CR>:popup PopUp\<CR>")
+  call VerifyScreenDump(buf, 'Test_popup_command_06', {})
+
+  call term_sendkeys(buf, "\<Esc>")
+
   call StopVimInTerminal(buf)
-  call delete('Xtest')
+endfunc
+
+" Test position of right-click menu when clicking near window edge.
+func Test_mouse_popup_position()
+  CheckFeature menu
+  CheckScreendump
+
+  let script =<< trim END
+    set mousemodel=popup_setpos
+    source $VIMRUNTIME/menu.vim
+    call setline(1, join(range(20)))
+    func Trigger(col)
+      call test_setmouse(1, a:col)
+      call feedkeys("\<RightMouse>", 't')
+    endfunc
+  END
+  call writefile(script, 'XmousePopupPosition', 'D')
+  let buf = RunVimInTerminal('-S XmousePopupPosition', #{rows: 20, cols: 50})
+
+  call term_sendkeys(buf, ":call Trigger(45)\<CR>")
+  call VerifyScreenDump(buf, 'Test_mouse_popup_position_01', {})
+  call term_sendkeys(buf, "\<Esc>")
+
+  if has('rightleft')
+    call term_sendkeys(buf, ":set rightleft\<CR>")
+    call term_sendkeys(buf, ":call Trigger(50 + 1 - 45)\<CR>")
+    call VerifyScreenDump(buf, 'Test_mouse_popup_position_02', {})
+    call term_sendkeys(buf, "\<Esc>:set norightleft\<CR>")
+  endif
+
+  call StopVimInTerminal(buf)
 endfunc
 
 func Test_popup_complete_backwards()
@@ -946,6 +1031,25 @@ func Test_menu_only_exists_in_terminal()
   endtry
 endfunc
 
+" This used to crash before patch 8.1.1424
+func Test_popup_delete_when_shown()
+  CheckFeature menu
+  CheckNotGui
+
+  func Func()
+    popup Foo
+    return "\<Ignore>"
+  endfunc
+
+  nmenu Foo.Bar :
+  nnoremap <expr> <F2> Func()
+  call feedkeys("\<F2>\<F2>\<Esc>", 'xt')
+
+  delfunc Func
+  nunmenu Foo.Bar
+  nunmap <F2>
+endfunc
+
 func Test_popup_complete_info_01()
   new
   inoremap <buffer><F5> <C-R>=complete_info().mode<CR>
@@ -956,7 +1060,7 @@ func Test_popup_complete_info_01()
   inoremap <buffer><F6> <C-R>=s:complTestEval()<CR>
   call writefile([
         \ 'dummy	dummy.txt	1',
-        \], 'Xdummy.txt')
+        \], 'Xdummy.txt', 'D')
   setlocal tags=Xdummy.txt
   setlocal dictionary=Xdummy.txt
   setlocal thesaurus=Xdummy.txt
@@ -968,6 +1072,10 @@ func Test_popup_complete_info_01()
         \ ["\<C-X>", 'ctrl_x'],
         \ ["\<C-X>\<C-N>", 'keyword'],
         \ ["\<C-X>\<C-P>", 'keyword'],
+        \ ["\<C-X>\<C-E>", 'scroll'],
+        \ ["\<C-X>\<C-Y>", 'scroll'],
+        \ ["\<C-X>\<C-E>\<C-E>\<C-Y>", 'scroll'],
+        \ ["\<C-X>\<C-Y>\<C-E>\<C-Y>", 'scroll'],
         \ ["\<C-X>\<C-L>", 'whole_line'],
         \ ["\<C-X>\<C-F>", 'files'],
         \ ["\<C-X>\<C-]>", 'tags'],
@@ -985,7 +1093,7 @@ func Test_popup_complete_info_01()
     call assert_equal(mode_name, getline('.'))
     %d
   endfor
-  call delete('Xdummy.txt')
+
   bwipe!
 endfunc
 
@@ -1069,6 +1177,10 @@ func Test_CompleteChanged()
     let g:event = copy(v:event)
     let g:item = get(v:event, 'completed_item', {})
     let g:word = get(g:item, 'word', v:null)
+    let l:line = getline('.')
+    if g:word == v:null && l:line == "bc"
+      let g:word = l:line
+    endif
   endfunction
   augroup AAAAA_Group
     au!
@@ -1088,18 +1200,34 @@ func Test_CompleteChanged()
   call assert_equal(v:null, g:word)
   call feedkeys("a\<C-N>\<C-N>\<C-N>\<C-N>\<C-P>", 'tx')
   call assert_equal('foobar', g:word)
+  call feedkeys("S\<C-N>bc", 'tx')
+  call assert_equal("bc", g:word)
+
+  func Omni_test(findstart, base)
+    if a:findstart
+      return col(".")
+    endif
+    return [#{word: "one"}, #{word: "two"}, #{word: "five"}]
+  endfunc
+  set omnifunc=Omni_test
+  set completeopt=menu,menuone
+  call feedkeys("i\<C-X>\<C-O>\<BS>\<BS>\<BS>f", 'tx')
+  call assert_equal('five', g:word)
+  call feedkeys("i\<C-X>\<C-O>\<BS>\<BS>\<BS>f\<BS>", 'tx')
+  call assert_equal('one', g:word)
 
   autocmd! AAAAA_Group
   set complete& completeopt&
   delfunc! OnPumChange
+  delfunc! Omni_test
   bw!
 endfunc
 
-function! GetPumPosition()
+func GetPumPosition()
   call assert_true( pumvisible() )
   let g:pum_pos = pum_getpos()
   return ''
-endfunction
+endfunc
 
 func Test_pum_getpos()
   new
@@ -1121,6 +1249,410 @@ func Test_pum_getpos()
   call assert_equal( {}, pum_getpos() )
   bw!
   unlet g:pum_pos
+endfunc
+
+" Test for the popup menu with the 'rightleft' option set
+func Test_pum_rightleft()
+  CheckFeature rightleft
+  CheckScreendump
+
+  let lines =<< trim END
+    abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz
+    vim
+    victory
+  END
+  call writefile(lines, 'Xtest1', 'D')
+  let buf = RunVimInTerminal('--cmd "set rightleft" Xtest1', {})
+  call term_sendkeys(buf, "Go\<C-P>")
+  call VerifyScreenDump(buf, 'Test_pum_rightleft_01', {'rows': 8})
+  call term_sendkeys(buf, "\<C-P>\<C-Y>")
+  call TermWait(buf, 30)
+  redraw!
+  call WaitForAssert({-> assert_match('\s*miv', Screenline(5))})
+
+  " Test for expanding tabs to spaces in the popup menu
+  let lines =<< trim END
+    one	two
+    one	three
+    four
+  END
+  call writefile(lines, 'Xtest2', 'D')
+  call term_sendkeys(buf, "\<Esc>:e! Xtest2\<CR>")
+  call TermWait(buf, 30)
+  call term_sendkeys(buf, "Goone\<C-X>\<C-L>")
+  call TermWait(buf, 30)
+  redraw!
+  call VerifyScreenDump(buf, 'Test_pum_rightleft_02', {'rows': 7})
+  call term_sendkeys(buf, "\<C-Y>")
+  call TermWait(buf, 30)
+  redraw!
+  call WaitForAssert({-> assert_match('\s*eerht     eno', Screenline(4))})
+
+  call StopVimInTerminal(buf)
+endfunc
+
+" Test for a popup menu with a scrollbar
+func Test_pum_scrollbar()
+  CheckScreendump
+  let lines =<< trim END
+    one
+    two
+    three
+  END
+  call writefile(lines, 'Xtest1', 'D')
+  let buf = RunVimInTerminal('--cmd "set pumheight=2" Xtest1', {})
+  call TermWait(buf)
+  call term_sendkeys(buf, "Go\<C-P>\<C-P>\<C-P>")
+  call VerifyScreenDump(buf, 'Test_pum_scrollbar_01', {'rows': 7})
+  call term_sendkeys(buf, "\<C-E>\<Esc>dd")
+  call TermWait(buf)
+
+  if has('rightleft')
+    call term_sendkeys(buf, ":set rightleft\<CR>")
+    call TermWait(buf)
+    call term_sendkeys(buf, "Go\<C-P>\<C-P>\<C-P>")
+    call VerifyScreenDump(buf, 'Test_pum_scrollbar_02', {'rows': 7})
+  endif
+
+  call StopVimInTerminal(buf)
+endfunc
+
+" Test default highlight groups for popup menu
+func Test_pum_highlights_default()
+  CheckScreendump
+  let lines =<< trim END
+    func CompleteFunc( findstart, base )
+      if a:findstart
+        return 0
+      endif
+      return {
+            \ 'words': [
+            \ { 'word': 'aword1', 'menu': 'extra text 1', 'kind': 'W', },
+            \ { 'word': 'aword2', 'menu': 'extra text 2', 'kind': 'W', },
+            \ { 'word': 'aword3', 'menu': 'extra text 3', 'kind': 'W', },
+            \]}
+    endfunc
+    set completeopt=menu
+    set completefunc=CompleteFunc
+  END
+  call writefile(lines, 'Xscript', 'D')
+  let buf = RunVimInTerminal('-S Xscript', {})
+  call TermWait(buf)
+  call term_sendkeys(buf, "iaw\<C-X>\<C-u>")
+  call TermWait(buf, 50)
+  call VerifyScreenDump(buf, 'Test_pum_highlights_01', {})
+  call term_sendkeys(buf, "\<C-E>\<Esc>u")
+  call TermWait(buf)
+  call StopVimInTerminal(buf)
+endfunc
+
+" Test custom highlight groups for popup menu
+func Test_pum_highlights_custom()
+  CheckScreendump
+  let lines =<< trim END
+    func CompleteFunc( findstart, base )
+      if a:findstart
+        return 0
+      endif
+      return {
+            \ 'words': [
+            \ { 'word': 'aword1', 'menu': 'extra text 1', 'kind': 'W', },
+            \ { 'word': 'aword2', 'menu': 'extra text 2', 'kind': 'W', },
+            \ { 'word': 'aword3', 'menu': 'extra text 3', 'kind': 'W', },
+            \]}
+    endfunc
+    set completeopt=menu
+    set completefunc=CompleteFunc
+    hi PmenuKind      ctermfg=1 ctermbg=225
+    hi PmenuKindSel   ctermfg=1 ctermbg=7
+    hi PmenuExtra     ctermfg=243 ctermbg=225
+    hi PmenuExtraSel  ctermfg=0 ctermbg=7
+  END
+  call writefile(lines, 'Xscript', 'D')
+  let buf = RunVimInTerminal('-S Xscript', {})
+  call TermWait(buf)
+  call term_sendkeys(buf, "iaw\<C-X>\<C-u>")
+  call TermWait(buf, 50)
+  call VerifyScreenDump(buf, 'Test_pum_highlights_02', {})
+  call term_sendkeys(buf, "\<C-E>\<Esc>u")
+  call TermWait(buf)
+  call StopVimInTerminal(buf)
+endfunc
+
+" Test match relate highlight group in pmenu
+func Test_pum_highlights_match()
+  CheckScreendump
+  let lines =<< trim END
+    func Omni_test(findstart, base)
+      if a:findstart
+        return col(".")
+      endif
+      return {
+            \ 'words': [
+            \ { 'word': 'foo', 'kind': 'fookind' },
+            \ { 'word': 'foofoo', 'kind': 'fookind' },
+            \ { 'word': 'foobar', 'kind': 'fookind' },
+            \ { 'word': 'fooBaz', 'kind': 'fookind' },
+            \ { 'word': 'foobala', 'kind': 'fookind' },
+            \ { 'word': '你好' },
+            \ { 'word': '你好吗' },
+            \ { 'word': '你不好吗' },
+            \ { 'word': '你可好吗' },
+            \]}
+    endfunc
+
+    func Comp()
+      let col = col('.')
+      if getline('.') == 'f'
+        let col -= 1
+      endif
+      call complete(col, [
+            \ #{word: "foo", icase: 1},
+            \ #{word: "Foobar", icase: 1},
+            \ #{word: "fooBaz", icase: 1},
+            \])
+      return ''
+    endfunc
+
+    set omnifunc=Omni_test
+    set completeopt=menu,noinsert,fuzzy
+    hi PmenuMatchSel  ctermfg=6 ctermbg=7
+    hi PmenuMatch     ctermfg=4 ctermbg=225
+  END
+  call writefile(lines, 'Xscript', 'D')
+  let  buf = RunVimInTerminal('-S Xscript', {})
+  call TermWait(buf)
+  call term_sendkeys(buf, "i\<C-X>\<C-O>")
+  call TermWait(buf, 50)
+  call term_sendkeys(buf, "fo")
+  call TermWait(buf, 50)
+  call VerifyScreenDump(buf, 'Test_pum_highlights_03', {})
+  call term_sendkeys(buf, "\<Esc>S\<C-X>\<C-O>")
+  call TermWait(buf, 50)
+  call term_sendkeys(buf, "你")
+  call TermWait(buf, 50)
+  call VerifyScreenDump(buf, 'Test_pum_highlights_04', {})
+  call term_sendkeys(buf, "吗")
+  call TermWait(buf, 50)
+  call VerifyScreenDump(buf, 'Test_pum_highlights_05', {})
+  call term_sendkeys(buf, "\<C-E>\<Esc>")
+
+  if has('rightleft')
+    call term_sendkeys(buf, ":set rightleft\<CR>")
+    call TermWait(buf, 50)
+    call term_sendkeys(buf, "S\<C-X>\<C-O>")
+    call TermWait(buf, 50)
+    call term_sendkeys(buf, "fo")
+    call TermWait(buf, 50)
+    call VerifyScreenDump(buf, 'Test_pum_highlights_06', {})
+    call term_sendkeys(buf, "\<Esc>S\<C-X>\<C-O>")
+    call TermWait(buf, 50)
+    call term_sendkeys(buf, "你")
+    call VerifyScreenDump(buf, 'Test_pum_highlights_06a', {})
+    call term_sendkeys(buf, "吗")
+    call VerifyScreenDump(buf, 'Test_pum_highlights_06b', {})
+    call term_sendkeys(buf, "\<C-E>\<Esc>")
+    call term_sendkeys(buf, ":set norightleft\<CR>")
+    call TermWait(buf)
+  endif
+
+  call term_sendkeys(buf, ":set completeopt-=fuzzy\<CR>")
+  call TermWait(buf)
+  call term_sendkeys(buf, "S\<C-X>\<C-O>")
+  call TermWait(buf, 50)
+  call term_sendkeys(buf, "fo")
+  call TermWait(buf, 50)
+  call VerifyScreenDump(buf, 'Test_pum_highlights_07', {})
+  call term_sendkeys(buf, "\<C-E>\<Esc>")
+
+  if has('rightleft')
+    call term_sendkeys(buf, ":set rightleft\<CR>")
+    call TermWait(buf, 50)
+    call term_sendkeys(buf, "S\<C-X>\<C-O>")
+    call TermWait(buf, 50)
+    call term_sendkeys(buf, "fo")
+    call TermWait(buf, 50)
+    call VerifyScreenDump(buf, 'Test_pum_highlights_08', {})
+    call term_sendkeys(buf, "\<C-E>\<Esc>")
+    call term_sendkeys(buf, ":set norightleft\<CR>")
+  endif
+
+  call term_sendkeys(buf, "S\<C-R>=Comp()\<CR>f")
+  call VerifyScreenDump(buf, 'Test_pum_highlights_09', {})
+  call term_sendkeys(buf, "o\<BS>\<C-R>=Comp()\<CR>")
+  call VerifyScreenDump(buf, 'Test_pum_highlights_09', {})
+
+  " issue #15095 wrong select
+  call term_sendkeys(buf, "\<ESC>:set completeopt=fuzzy,menu\<CR>")
+  call TermWait(buf)
+  call term_sendkeys(buf, "S hello helio hero h\<C-X>\<C-P>")
+  call TermWait(buf, 50)
+  call VerifyScreenDump(buf, 'Test_pum_highlights_10', {})
+
+  call term_sendkeys(buf, "\<ESC>S hello helio hero h\<C-X>\<C-P>\<C-P>")
+  call TermWait(buf, 50)
+  call VerifyScreenDump(buf, 'Test_pum_highlights_11', {})
+
+  " issue #15357
+  call term_sendkeys(buf, "\<ESC>S/non_existing_folder\<C-X>\<C-F>")
+  call TermWait(buf, 50)
+  call VerifyScreenDump(buf, 'Test_pum_highlights_15', {})
+
+  call term_sendkeys(buf, "\<C-E>\<Esc>")
+  call TermWait(buf)
+
+  call StopVimInTerminal(buf)
+endfunc
+
+func Test_pum_user_abbr_hlgroup()
+  CheckScreendump
+  let lines =<< trim END
+    func CompleteFunc( findstart, base )
+      if a:findstart
+        return 0
+      endif
+      return {
+            \ 'words': [
+            \ { 'word': 'aword1', 'menu': 'extra text 1', 'kind': 'W', 'abbr_hlgroup': 'StrikeFake' },
+            \ { 'word': 'aword2', 'menu': 'extra text 2', 'kind': 'W', },
+            \ { 'word': '你好', 'menu': 'extra text 3', 'kind': 'W', 'abbr_hlgroup': 'StrikeFake' },
+            \]}
+    endfunc
+    set completeopt=menu
+    set completefunc=CompleteFunc
+
+    hi StrikeFake ctermfg=9
+    func HlMatch()
+      hi PmenuMatchSel  ctermfg=6 ctermbg=7 cterm=underline
+      hi PmenuMatch     ctermfg=4 ctermbg=225 cterm=underline
+    endfunc
+  END
+  call writefile(lines, 'Xscript', 'D')
+  let buf = RunVimInTerminal('-S Xscript', {})
+
+  call TermWait(buf)
+  call term_sendkeys(buf, "Saw\<C-X>\<C-U>")
+  call VerifyScreenDump(buf, 'Test_pum_highlights_12', {})
+  call term_sendkeys(buf, "\<C-E>\<Esc>")
+
+  call TermWait(buf)
+  call term_sendkeys(buf, ":call HlMatch()\<CR>")
+
+  call TermWait(buf)
+  call term_sendkeys(buf, "Saw\<C-X>\<C-U>")
+  call VerifyScreenDump(buf, 'Test_pum_highlights_13', {})
+  call term_sendkeys(buf, "\<C-N>")
+  call VerifyScreenDump(buf, 'Test_pum_highlights_14', {})
+  call term_sendkeys(buf, "\<C-E>\<Esc>")
+
+  call StopVimInTerminal(buf)
+endfunc
+
+func Test_pum_user_kind_hlgroup()
+  CheckScreendump
+  let lines =<< trim END
+    func CompleteFunc( findstart, base )
+      if a:findstart
+        return 0
+      endif
+      return {
+            \ 'words': [
+            \ { 'word': 'aword1', 'menu': 'extra text 1', 'kind': 'variable', 'kind_hlgroup': 'KindVar', 'abbr_hlgroup': 'StrikeFake' },
+            \ { 'word': 'aword2', 'menu': 'extra text 2', 'kind': 'function', 'kind_hlgroup': 'KindFunc' },
+            \ { 'word': '你好', 'menu': 'extra text 3', 'kind': 'class', 'kind_hlgroup': 'KindClass'  },
+            \]}
+    endfunc
+    set completeopt=menu
+    set completefunc=CompleteFunc
+
+    hi StrikeFake ctermfg=9
+    hi KindVar ctermfg=yellow
+    hi KindFunc ctermfg=blue
+    hi KindClass ctermfg=green
+  END
+  call writefile(lines, 'Xscript', 'D')
+  let buf = RunVimInTerminal('-S Xscript', {})
+
+  call TermWait(buf)
+  call term_sendkeys(buf, "S\<C-X>\<C-U>")
+  call VerifyScreenDump(buf, 'Test_pum_highlights_16', {})
+  call term_sendkeys(buf, "\<C-E>\<Esc>")
+
+  call StopVimInTerminal(buf)
+endfunc
+
+func Test_pum_completeitemalign()
+  CheckScreendump
+  let lines =<< trim END
+    func Omni_test(findstart, base)
+      if a:findstart
+        return col(".")
+      endif
+      return {
+            \ 'words': [
+            \ { 'word': 'foo', 'kind': 'S', 'menu': 'menu' },
+            \ { 'word': 'bar', 'kind': 'T', 'menu': 'menu' },
+            \ { 'word': '你好', 'kind': 'C', 'menu': '中文' },
+            \]}
+    endfunc
+
+    func Omni_long(findstart, base)
+      if a:findstart
+        return col(".")
+      endif
+      return {
+            \ 'words': [
+            \ { 'word': 'loooong_foo', 'kind': 'S', 'menu': 'menu' },
+            \ { 'word': 'loooong_bar', 'kind': 'T', 'menu': 'menu' },
+            \]}
+    endfunc
+    set omnifunc=Omni_test
+    command! -nargs=0 T1 set cia=abbr,kind,menu
+    command! -nargs=0 T2 set cia=abbr,menu,kind
+    command! -nargs=0 T3 set cia=kind,abbr,menu
+    command! -nargs=0 T4 set cia=kind,menu,abbr
+    command! -nargs=0 T5 set cia=menu,abbr,kind
+    command! -nargs=0 T6 set cia=menu,kind,abbr
+    command! -nargs=0 T7 set cia&
+  END
+  call writefile(lines, 'Xscript', 'D')
+  let  buf = RunVimInTerminal('-S Xscript', {})
+  call TermWait(buf)
+
+  " T1 is default
+  call term_sendkeys(buf, ":T1\<CR>S\<C-X>\<C-O>")
+  call VerifyScreenDump(buf, 'Test_pum_completeitemalign_01', {})
+  call term_sendkeys(buf, "\<C-E>\<Esc>")
+
+  " T2
+  call term_sendkeys(buf, ":T2\<CR>S\<C-X>\<C-O>")
+  call VerifyScreenDump(buf, 'Test_pum_completeitemalign_02', {})
+  call term_sendkeys(buf, "\<C-E>\<Esc>")
+
+  " T3
+  call term_sendkeys(buf, ":T3\<CR>S\<C-X>\<C-O>")
+  call VerifyScreenDump(buf, 'Test_pum_completeitemalign_03', {})
+  call term_sendkeys(buf, "\<C-E>\<Esc>")
+
+  " T4
+  call term_sendkeys(buf, ":T4\<CR>S\<C-X>\<C-O>")
+  call VerifyScreenDump(buf, 'Test_pum_completeitemalign_04', {})
+  call term_sendkeys(buf, "\<C-E>\<Esc>")
+
+  " T5
+  call term_sendkeys(buf, ":T5\<CR>S\<C-X>\<C-O>")
+  call VerifyScreenDump(buf, 'Test_pum_completeitemalign_05', {})
+  call term_sendkeys(buf, "\<C-E>\<Esc>")
+
+  " T6
+  call term_sendkeys(buf, ":T6\<CR>S\<C-X>\<C-O>")
+  call VerifyScreenDump(buf, 'Test_pum_completeitemalign_06', {})
+  call term_sendkeys(buf, "\<C-E>\<Esc>")
+
+  call term_sendkeys(buf, ":set columns=12 cmdheight=2 omnifunc=Omni_long\<CR>S\<C-X>\<C-O>")
+  call VerifyScreenDump(buf, 'Test_pum_completeitemalign_07', {})
+  call term_sendkeys(buf, "\<C-E>\<Esc>:T7\<CR>")
+  call StopVimInTerminal(buf)
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

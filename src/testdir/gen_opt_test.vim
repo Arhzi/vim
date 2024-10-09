@@ -1,20 +1,24 @@
-" Script to generate testdir/opt_test.vim from option.c
+" Script to generate testdir/opt_test.vim from optiondefs.h
 
 set cpo=&vim
 
 " Only do this when build with the +eval feature.
 if 1
 
+try
+
 set nomore
+
+const K_KENTER = -16715
 
 " The terminal size is restored at the end.
 " Clear out t_WS, we don't want to resize the actual terminal.
 let script = [
       \ '" DO NOT EDIT: Generated with gen_opt_test.vim',
+      \ '" Used by test_options.vim.',
       \ '',
       \ 'let save_columns = &columns',
       \ 'let save_lines = &lines',
-      \ 'let save_term = &term',
       \ 'set t_WS=',
       \ ]
 
@@ -55,7 +59,10 @@ let test_values = {
       \ 'updatecount': [[0, 1, 8, 9999], [-1]],
       \ 'updatetime': [[0, 1, 8, 9999], [-1]],
       \ 'verbose': [[-1, 0, 1, 8, 9999], []],
-      \ 'wildcharm': [[-1, 0, 100], []],
+      \ 'wildchar': [[-1, 0, 100, 'x', '^Y', '^@', '<Esc>', '<t_xx>', '<', '^'],
+      \		['', 'xxx', '<xxx>', '<Esc', '<t_xx', '<C-C>', '<NL>', '<CR>', K_KENTER]],
+      \ 'wildcharm': [[-1, 0, 100, 'x', '^Y', '^@', '<Esc>', '<', '^'],
+      \		['', 'xxx', '<xxx>', '<Esc', '<t_xx', '<C-C>', '<NL>', '<CR>', K_KENTER]],
       \ 'winheight': [[1, 10, 999], [-1, 0]],
       \ 'winminheight': [[0, 1], [-1]],
       \ 'winminwidth': [[0, 1, 10], [-1]],
@@ -72,14 +79,16 @@ let test_values = {
       \ 'bufhidden': [['', 'hide', 'wipe'], ['xxx', 'hide,wipe']],
       \ 'buftype': [['', 'help', 'nofile'], ['xxx', 'help,nofile']],
       \ 'casemap': [['', 'internal'], ['xxx']],
-      \ 'cedit': [['', '\<Esc>'], ['xxx', 'f']],
-      \ 'clipboard': [['', 'unnamed', 'autoselect,unnamed', 'html', 'exclude:vimdisplay'], ['xxx', '\ze*']],
+      \ 'cedit': [['', '^Y', '^@', '<Esc>', '<t_xx>'],
+      \		['xxx', 'f', '<xxx>', '<Esc', '<t_xx']],
+      \ 'clipboard': [['', 'unnamed', 'autoselect,unnamed', 'html', 'exclude:vimdisplay'], ['xxx', '\ze*', 'exclude:\\%(']],
       \ 'colorcolumn': [['', '8', '+2'], ['xxx']],
       \ 'comments': [['', 'b:#'], ['xxx']],
-      \ 'commentstring': [['', '/*%s*/'], ['xxx']],
+      \ 'commentstring': [['', '/*\ %s\ */'], ['xxx']],
       \ 'complete': [['', 'w,b'], ['xxx']],
       \ 'concealcursor': [['', 'n', 'nvic'], ['xxx']],
       \ 'completeopt': [['', 'menu', 'menu,longest'], ['xxx', 'menu,,,longest,']],
+      \ 'completeitemalign': [['abbr,kind,menu'], ['xxx','abbr,menu','abbr,menu,kind,abbr', 'abbr', 'abbr1234,kind', '']],
       \ 'completepopup': [['', 'height:13', 'highlight:That', 'width:10,height:234,highlight:Mine'], ['height:yes', 'width:no', 'xxx', 'xxx:99', 'border:maybe', 'border:1']],
       \ 'completeslash': [['', 'slash', 'backslash'], ['xxx']],
       \ 'cryptmethod': [['', 'zip'], ['xxx']],
@@ -90,7 +99,7 @@ let test_values = {
       \ 'display': [['', 'lastline', 'lastline,uhex'], ['xxx']],
       \ 'eadirection': [['', 'both', 'ver'], ['xxx', 'ver,hor']],
       \ 'encoding': [['latin1'], ['xxx', '']],
-      \ 'eventignore': [['', 'WinEnter', 'WinLeave,winenter'], ['xxx']],
+      \ 'eventignore': [['', 'WinEnter', 'WinLeave,winenter', 'all,WinEnter'], ['xxx']],
       \ 'fileencoding': [['', 'latin1', 'xxx'], []],
       \ 'fileformat': [['', 'dos', 'unix'], ['xxx']],
       \ 'fileformats': [['', 'dos', 'dos,unix'], ['xxx']],
@@ -104,6 +113,7 @@ let test_values = {
       \ 'guifont': [['', fontname], []],
       \ 'guifontwide': [['', fontname], []],
       \ 'guifontset': [['', fontname], []],
+      \ 'guioptions': [['', 'a'], ['Q']],
       \ 'helplang': [['', 'de', 'de,it'], ['xxx']],
       \ 'highlight': [['', 'e:Error'], ['xxx']],
       \ 'imactivatekey': [['', 'S-space'], ['xxx']],
@@ -111,9 +121,13 @@ let test_values = {
       \ 'isident': [['', '@', '@,48-52'], ['xxx', '@48']],
       \ 'iskeyword': [['', '@', '@,48-52'], ['xxx', '@48']],
       \ 'isprint': [['', '@', '@,48-52'], ['xxx', '@48']],
+      \ 'jumpoptions': [['', 'stack'], ['xxx']],
       \ 'keymap': [['', 'accents'], ['xxx']],
       \ 'keymodel': [['', 'startsel', 'startsel,stopsel'], ['xxx']],
+      \ 'keyprotocol': [['', 'xxx:none', 'yyy:mok2', 'zzz:kitty'],
+      \		[':none', 'xxx:', 'x:non', 'y:mok3', 'z:kittty']],
       \ 'langmap': [['', 'xX', 'aA,bB'], ['xxx']],
+      \ 'lispoptions': [['', 'expr:0', 'expr:1'], ['xxx']],
       \ 'listchars': [['', 'eol:x', 'eol:x,space:y'], ['xxx']],
       \ 'matchpairs': [['', '(:)', '(:),<:>'], ['xxx']],
       \ 'mkspellmem': [['10000,100,12'], ['', 'xxx']],
@@ -126,19 +140,26 @@ let test_values = {
       \ 'printoptions': [['', 'header:0', 'left:10pc,top:5pc'], ['xxx']],
       \ 'scrollopt': [['', 'ver', 'ver,hor'], ['xxx']],
       \ 'renderoptions': [[''], ['xxx']],
+      \ 'rightleftcmd': [['search'], ['xxx']],
       \ 'selection': [['old', 'inclusive'], ['', 'xxx']],
       \ 'selectmode': [['', 'mouse', 'key,cmd'], ['xxx']],
       \ 'sessionoptions': [['', 'blank', 'help,options,slash'], ['xxx']],
+      \ 'showcmdloc': [['last', 'statusline', 'tabline'], ['xxx']],
       \ 'signcolumn': [['', 'auto', 'no'], ['xxx', 'no,yes']],
-      \ 'spellfile': [['', 'file.en.add'], ['xxx', '/tmp/file']],
+      \ 'spellfile': [['', 'file.en.add', '/tmp/dir\ with\ space/en.utf-8.add'], ['xxx', '/tmp/file']],
       \ 'spelllang': [['', 'xxx', 'sr@latin'], ['not&lang', "that\\\rthere"]],
       \ 'spelloptions': [['', 'camel'], ['xxx']],
       \ 'spellsuggest': [['', 'best', 'double,33'], ['xxx']],
+      \ 'splitkeep': [['cursor', 'screen', 'topline'], ['xxx']],
+      \ 'swapsync': [['', 'sync', 'fsync'], ['xxx']],
       \ 'switchbuf': [['', 'useopen', 'split,newtab'], ['xxx']],
+      \ 'tabclose': [['', 'left', 'left,uselast'], ['xxx']],
       \ 'tagcase': [['smart', 'match'], ['', 'xxx', 'smart,match']],
       \ 'term': [[], []],
       \ 'termguicolors': [[], []],
       \ 'termencoding': [has('gui_gtk') ? [] : ['', 'utf-8'], ['xxx']],
+      \ 'termwinkey': [['', 'f', '^Y', '^@', '<Esc>', '<t_xx>', "\u3042", '<', '^'],
+      \		['<xxx>', '<Esc', '<t_xx']],
       \ 'termwinsize': [['', '24x80', '0x80', '32x0', '0x0'], ['xxx', '80', '8ax9', '24x80b']],
       \ 'termwintype': [['', 'winpty', 'conpty'], ['xxx']],
       \ 'toolbar': [['', 'icons', 'text'], ['xxx']],
@@ -152,7 +173,7 @@ let test_values = {
       \ 'virtualedit': [['', 'all', 'all,block'], ['xxx']],
       \ 'whichwrap': [['', 'b,s', 'bs'], ['xxx']],
       \ 'wildmode': [['', 'full', 'list:full', 'full,longest'], ['xxx', 'a4', 'full,full,full,full,full']],
-      \ 'wildoptions': [['', 'tagfile'], ['xxx']],
+      \ 'wildoptions': [['', 'tagfile', 'pum', 'fuzzy'], ['xxx']],
       \ 'winaltkeys': [['menu', 'no'], ['', 'xxx']],
       \
       \ 'luadll': [[], []],
@@ -200,8 +221,8 @@ while 1
       " setting an option can only fail when it's implemented.
       call add(script, "if exists('+" . name . "')")
       for val in a[1]
-	call add(script, "call assert_fails('set " . name . "=" . val . "')")
-	call add(script, "call assert_fails('set " . shortname . "=" . val . "')")
+	call add(script, "silent! call assert_fails('set " . name . "=" . val . "')")
+	call add(script, "silent! call assert_fails('set " . shortname . "=" . val . "')")
       endfor
       call add(script, "endif")
     endif
@@ -223,11 +244,17 @@ while 1
   endif
 endwhile
 
-call add(script, 'let &term = save_term')
 call add(script, 'let &columns = save_columns')
 call add(script, 'let &lines = save_lines')
 
 call writefile(script, 'opt_test.vim')
+
+" Exit with error-code if error occurs.
+catch
+  set verbose=1
+  echoc 'Error:' v:exception 'in' v:throwpoint
+  cq! 1
+endtry
 
 endif
 

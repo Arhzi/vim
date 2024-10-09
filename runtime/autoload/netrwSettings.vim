@@ -1,7 +1,10 @@
 " netrwSettings.vim: makes netrw settings simpler
-" Date:		Nov 09, 2016
-" Maintainer:	Charles E Campbell <NcampObell@SdrPchip.AorgM-NOSPAM>
-" Version:	16
+" Date:		Nov 15, 2021
+" Maintainer:   This runtime file is looking for a new maintainer.
+" Former Maintainer: Charles E Campbell
+" Version:	18
+" Last Change:
+"   2024 May 08 by Vim Project: cleanup legacy Win9X checks
 " Copyright:    Copyright (C) 1999-2007 Charles E. Campbell {{{1
 "               Permission is hereby granted to use and distribute this code,
 "               with or without modifications, provided that this copyright
@@ -19,7 +22,7 @@
 if exists("g:loaded_netrwSettings") || &cp
   finish
 endif
-let g:loaded_netrwSettings = "v16"
+let g:loaded_netrwSettings = "v18"
 if v:version < 700
  echohl WarningMsg
  echo "***warning*** this version of netrwSettings needs vim 7.0"
@@ -31,7 +34,7 @@ endif
 " NetrwSettings: {{{1
 fun! netrwSettings#NetrwSettings()
   " this call is here largely just to insure that netrw has been loaded
-  call netrw#SavePosn()
+  call netrw#WinPath("")
   if !exists("g:loaded_netrw")
    echohl WarningMsg | echomsg "***sorry*** netrw needs to be loaded prior to using NetrwSettings" | echohl None
    return
@@ -90,7 +93,6 @@ fun! netrwSettings#NetrwSettings()
   put = 'let g:netrw_sshport           = '.g:netrw_sshport
   put = 'let g:netrw_silent            = '.g:netrw_silent
   put = 'let g:netrw_use_nt_rcp        = '.g:netrw_use_nt_rcp
-  put = 'let g:netrw_win95ftp          = '.g:netrw_win95ftp
   let s:netrw_xfer_stop= line(".")
   put =''
   put ='+ Netrw Messages'
@@ -159,8 +161,6 @@ fun! netrwSettings#NetrwSettings()
   put = 'let g:netrw_localmkdiropt     = '.g:netrw_localmkdiropt
   put = 'let g:netrw_localmovecmd      = '.g:netrw_localmovecmd
   put = 'let g:netrw_localmovecmdopt   = '.g:netrw_localmovecmdopt
-  put = 'let g:netrw_localrmdir        = '.g:netrw_localrmdir
-  put = 'let g:netrw_localrmdiropt     = '.g:netrw_localrmdiropt
   put = 'let g:netrw_maxfilenamelen    = '.g:netrw_maxfilenamelen
   put = 'let g:netrw_menu              = '.g:netrw_menu
   put = 'let g:netrw_mousemaps         = '.g:netrw_mousemaps

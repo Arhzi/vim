@@ -38,6 +38,9 @@ func Test_selectmode_start()
   set selectmode=cmd
   call feedkeys('gvabc', 'xt')
   call assert_equal('abctdef', getline(1))
+  " arrow keys without shift should not start selection
+  call feedkeys("A\<Home>\<Right>\<Left>ro", 'xt')
+  call assert_equal('roabctdef', getline(1))
   set selectmode= keymodel=
   bw!
 endfunc
@@ -162,7 +165,10 @@ func Test_term_mouse_multiple_clicks_to_select_mode()
   let save_term = &term
   let save_ttymouse = &ttymouse
   call test_override('no_query_mouse', 1)
-  set mouse=a term=xterm mousetime=200
+
+  " 'mousetime' must be sufficiently large, or else the test is flaky when
+  " using a ssh connection with X forwarding; i.e. ssh -X.
+  set mouse=a term=xterm mousetime=1000
   set selectmode=mouse
   new
 
@@ -249,6 +255,85 @@ func Test_term_mouse_multiple_clicks_to_select_mode()
   set mousetime&
   set selectmode&
   call test_override('no_query_mouse', 0)
+  bwipe!
+endfunc
+
+" Test for selecting a register with CTRL-R
+func Test_selectmode_register()
+  new
+
+  " Default behavior: use unnamed register
+  call setline(1, 'foo')
+  call setreg('"', 'bar')
+  call setreg('a', 'baz')
+  exe ":norm! v\<c-g>a"
+  call assert_equal(getline('.'), 'aoo')
+  call assert_equal('f', getreg('"'))
+  call assert_equal('baz', getreg('a'))
+
+  " Use the black hole register
+  call setline(1, 'foo')
+  call setreg('"', 'bar')
+  call setreg('a', 'baz')
+  exe ":norm! v\<c-g>\<c-r>_a"
+  call assert_equal(getline('.'), 'aoo')
+  call assert_equal('bar', getreg('"'))
+  call assert_equal('baz', getreg('a'))
+
+  " Invalid register: use unnamed register
+  call setline(1, 'foo')
+  call setreg('"', 'bar')
+  call setreg('a', 'baz')
+  exe ":norm! v\<c-g>\<c-r>?a"
+  call assert_equal(getline('.'), 'aoo')
+  call assert_equal('f', getreg('"'))
+  call assert_equal('baz', getreg('a'))
+
+  " Use unnamed register
+  call setline(1, 'foo')
+  call setreg('"', 'bar')
+  call setreg('a', 'baz')
+  exe ":norm! v\<c-g>\<c-r>\"a"
+  call assert_equal(getline('.'), 'aoo')
+  call assert_equal('f', getreg('"'))
+  call assert_equal('baz', getreg('a'))
+
+  " use specicifed register, unnamed register is also written
+  call setline(1, 'foo')
+  call setreg('"', 'bar')
+  call setreg('a', 'baz')
+  exe ":norm! v\<c-g>\<c-r>aa"
+  call assert_equal(getline('.'), 'aoo')
+  call assert_equal('f', getreg('"'))
+  call assert_equal('f', getreg('a'))
+
+  bw!
+endfunc
+
+func Test_ins_ctrl_o_in_insert_mode_resets_selectmode()
+  new
+  " ctrl-o in insert mode resets restart_VIsual_select
+  call setline(1, 'abcdef')
+  call cursor(1, 1)
+  exe "norm! \<c-v>\<c-g>\<c-o>c\<c-o>\<c-v>\<right>\<right>IABC"
+  call assert_equal('ABCbcdef', getline(1))
+
+  bwipe!
+endfunc
+
+" Test that an :lmap mapping for a printable keypad key is applied when typing
+" it in Select mode.
+func Test_selectmode_keypad_lmap()
+  new
+  lnoremap <buffer> <kPoint> ???
+  lnoremap <buffer> <kEnter> !!!
+  setlocal iminsert=1
+  call setline(1, 'abcdef')
+  call feedkeys("gH\<kPoint>\<Esc>", 'tx')
+  call assert_equal(['???'], getline(1, '$'))
+  call feedkeys("gH\<kEnter>\<Esc>", 'tx')
+  call assert_equal(['!!!'], getline(1, '$'))
+
   bwipe!
 endfunc
 

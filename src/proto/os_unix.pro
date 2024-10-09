@@ -1,11 +1,12 @@
 /* os_unix.c */
+sighandler_T mch_signal(int sig, sighandler_T func);
 int mch_chdir(char *path);
 void mch_write(char_u *s, int len);
 int mch_inchar(char_u *buf, int maxlen, long wtime, int tb_change_cnt);
 int mch_char_avail(void);
 int mch_check_messages(void);
 long_u mch_total_mem(int special);
-void mch_delay(long msec, int ignoreinput);
+void mch_delay(long msec, int flags);
 int mch_stackcheck(char *p);
 void mch_suspend(void);
 void mch_init(void);
@@ -23,7 +24,6 @@ int use_xterm_like_mouse(char_u *name);
 int use_xterm_mouse(void);
 int vim_is_iris(char_u *name);
 int vim_is_vt300(char_u *name);
-int vim_is_fastterm(char_u *name);
 int mch_get_user_name(char_u *s, int len);
 int mch_get_uname(uid_t uid, char_u *s, int len);
 void mch_get_host_name(char_u *s, int len);
@@ -37,6 +37,7 @@ long mch_getperm(char_u *name);
 int mch_setperm(char_u *name, long perm);
 int mch_fsetperm(int fd, long perm);
 void mch_copy_sec(char_u *from_file, char_u *to_file);
+void mch_copy_xattr(char_u *from_file, char_u *to_file);
 vim_acl_T mch_get_acl(char_u *fname);
 void mch_set_acl(char_u *fname, vim_acl_T aclent);
 void mch_free_acl(vim_acl_T aclent);
@@ -72,8 +73,10 @@ int mch_expand_wildcards(int num_pat, char_u **pat, int *num_file, char_u ***fil
 int mch_has_exp_wildcard(char_u *p);
 int mch_has_wildcard(char_u *p);
 int mch_rename(const char *src, const char *dest);
+int gpm_available(void);
 int gpm_enabled(void);
 int mch_libcall(char_u *libname, char_u *funcname, char_u *argstring, int argint, char_u **string_result, int *number_result);
+int mch_get_random(char_u *buf, int len);
 void setup_term_clip(void);
 void start_xterm_trace(int button);
 void stop_xterm_trace(void);
@@ -85,4 +88,7 @@ void clip_xterm_set_selection(Clipboard_T *cbd);
 int xsmp_handle_requests(void);
 void xsmp_init(void);
 void xsmp_close(void);
+void stop_timeout(void);
+volatile sig_atomic_t *start_timeout(long msec);
+void delete_timer(void);
 /* vim: set ft=c : */

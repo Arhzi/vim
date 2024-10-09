@@ -1,4 +1,4 @@
-*recover.txt*   For Vim version 8.2.  Last change: 2020 May 09
+*recover.txt*   For Vim version 9.1.  Last change: 2023 Apr 22
 
 
 		  VIM REFERENCE MANUAL    by Bram Moolenaar
@@ -64,8 +64,8 @@ Disadvantages:
   directories (although Vim tries to avoid that by comparing the path name).
   This will result in bogus ATTENTION warning messages.
 - When you use your home directory, and somebody else tries to edit the same
-  file, he will not see your swap file and will not get the ATTENTION warning
-  message.
+  file, that user will not see your swap file and will not get the ATTENTION
+  warning message.
 On the Amiga you can also use a recoverable ram disk, but there is no 100%
 guarantee that this works.  Putting swap files in a normal ram disk (like RAM:
 on the Amiga) or in a place that is cleared when rebooting (like /tmp on Unix)
@@ -176,7 +176,7 @@ the recover command:
 :rec[over]! [file]	Like ":recover", but any changes in the current
 			buffer are lost.
 
-							*E312* *E309* *E310*
+						*E312* *E309* *E310* *E1364*
 Vim has some intelligence about what to do if the swap file is corrupt in
 some way.  If Vim has doubt about what it found, it will give an error
 message and insert lines with "???" in the text.  If you see an error message

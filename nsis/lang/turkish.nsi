@@ -1,4 +1,9 @@
+# vi:set ts=8 sts=4 sw=4 et fdm=marker:
+#
 # turkish.nsi: Turkish language strings for gvim NSIS installer.
+#
+# Locale ID    : 1055
+# Locale Name  : tr
 # fileencoding : UTF-8
 # Author       : Emir SARI
 
@@ -10,7 +15,23 @@ LangString ^SetupCaption     ${LANG_TURKISH} \
         "$(^Name) Setup"
 LangString ^UninstallCaption ${LANG_TURKISH} \
         "$(^Name) Uninstall"
-        
+
+##############################################################################
+# Translated license file for the license page                            {{{1
+##############################################################################
+
+LicenseLangString page_lic_file 0 "${VIMRT}\doc\uganda.nsis.txt"
+#LicenseLangString page_lic_file ${LANG_TURKISH} "${VIMRT}\doc\uganda.nsis.trx"
+
+##############################################################################
+# Translated README.txt file, which is opened after installation          {{{1
+##############################################################################
+
+LangString vim_readme_file 0 "README.txt"
+#LangString vim_readme_file ${LANG_TURKISH} "README.trx.txt"
+
+##############################################################################
+
 LangString str_show_readme          ${LANG_TURKISH} \
     "Kurulum bittikten sonra README dosyasını aç"
 
@@ -23,7 +44,7 @@ LangString str_type_minimal         ${LANG_TURKISH} \
 
 LangString str_type_full            ${LANG_TURKISH} \
     "Tam"
-    
+
 ##############################################################################
 # Section Titles & Description                                            {{{1
 ##############################################################################
@@ -62,12 +83,12 @@ LangString str_section_start_menu   ${LANG_TURKISH} \
     "Başlat Menüsü - Programlar klasöründe"
 LangString str_desc_start_menu      ${LANG_TURKISH} \
     "Vim kısayolunu Başlat Menüsüne ekler."
-    
+
 LangString str_section_edit_with    ${LANG_TURKISH} \
     "Vim ile Aç"
 LangString str_desc_edit_with       ${LANG_TURKISH} \
     "Vim'i $\"Birlikte aç$\" sağ tık menüsüne ekler."
-    
+
  LangString str_section_vim_rc       ${LANG_TURKISH} \
     "Bir yapılandırma dosyası oluştur"
 LangString str_desc_vim_rc          ${LANG_TURKISH} \
@@ -89,11 +110,6 @@ LangString str_section_plugin_vim   ${LANG_TURKISH} \
 LangString str_desc_plugin_vim      ${LANG_TURKISH} \
     "Eklenti dizinlerini Vim yükleme dizininde oluşturur. Bu eklentilerden \
      bilgisayarın tüm kullanıcıları yararlanabilir."
-
-LangString str_section_vis_vim      ${LANG_TURKISH} \
-    "VisVim eklentisi"
-LangString str_desc_vis_vim         ${LANG_TURKISH} \
-    "Microsoft Visual Studio entegrasyonu için VisVim eklentisi" 
 
 LangString str_section_nls          ${LANG_TURKISH} \
     "Ek dil desteği"
@@ -129,14 +145,14 @@ LangString str_unsection_rootdir    ${LANG_TURKISH} \
     "Vim kök dizinini kaldır"
 LangString str_desc_rm_rootdir      ${LANG_TURKISH} \
     "Vim kök dizinini kaldırır. Bu dizin Vim yapılandırma dosyalarını içerir!"
-    
+
  LangString str_msg_install_fail  ${LANG_TURKISH} \
     "Yükleme başarısız oldu. Yeniden deneyin."
 
 LangString str_msg_rm_exe_fail   ${LANG_TURKISH} \
     "$0 içindeki bazı dosyalar silinemedi!$\r$\n\
      Bu dosyaları el ile kaldırmalısınız."
-     
+
  LangString str_msg_uninstalling  ${LANG_TURKISH} \
     "Eski sürüm kaldırılıyor..."
 

@@ -1,6 +1,8 @@
 " Language   : Netrw Listing Syntax
-" Maintainer : Charles E. Campbell
-" Last change: Nov 07, 2019
+" Maintainer:	This runtime file is looking for a new maintainer.
+" Former Maintainer: Charles E. Campbell
+" Last Change: Nov 07, 2019
+"   2024 Feb 19 by Vim Project (announce adoption)
 " Version    : 20
 " ---------------------------------------------------------------------
 if exists("b:current_syntax")
@@ -105,7 +107,7 @@ if !exists("did_drchip_netrwlist_syntax")
 
  " special syntax highlighting (see :he g:netrw_special_syntax)
  hi default link netrwCoreDump	WarningMsg
- hi default link netrwData	DiffChange
+ hi default link netrwData	Folded
  hi default link netrwHdr	netrwPlain
  hi default link netrwLex	netrwPlain
  hi default link netrwLib	DiffChange

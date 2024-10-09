@@ -16,13 +16,15 @@
 typedef struct ucmd
 {
     char_u	*uc_name;	// The command name
+    size_t	uc_namelen;	// The length of the command name (excluding the NUL)
     long_u	uc_argt;	// The argument type
     char_u	*uc_rep;	// The command's replacement string
     long	uc_def;		// The default value for a range/count
     int		uc_compl;	// completion type
     cmd_addr_T	uc_addr_type;	// The command's address type
-# ifdef FEAT_EVAL
     sctx_T	uc_script_ctx;	// SCTX where the command was defined
+    int		uc_flags;	// some UC_ flags
+# ifdef FEAT_EVAL
     char_u	*uc_compl_arg;	// completion argument if any
 # endif
 } ucmd_T;
@@ -30,91 +32,108 @@ typedef struct ucmd
 // List of all user commands.
 static garray_T ucmds = {0, 0, sizeof(ucmd_T), 4, NULL};
 
+// When non-zero it is not allowed to add or remove user commands
+static int ucmd_locked = 0;
+
 #define USER_CMD(i) (&((ucmd_T *)(ucmds.ga_data))[i])
 #define USER_CMD_GA(gap, i) (&((ucmd_T *)((gap)->ga_data))[i])
 
 /*
  * List of names for completion for ":command" with the EXPAND_ flag.
- * Must be alphabetical for completion.
+ * Must be alphabetical on the 'value' field for completion and because
+ * it is used by bsearch()!
  */
-static struct
+static keyvalue_T command_complete_tab[] =
 {
-    int	    expand;
-    char    *name;
-} command_complete[] =
-{
-    {EXPAND_ARGLIST, "arglist"},
-    {EXPAND_AUGROUP, "augroup"},
-    {EXPAND_BEHAVE, "behave"},
-    {EXPAND_BUFFERS, "buffer"},
-    {EXPAND_COLORS, "color"},
-    {EXPAND_COMMANDS, "command"},
-    {EXPAND_COMPILER, "compiler"},
+    KEYVALUE_ENTRY(EXPAND_ARGLIST, "arglist"),
+    KEYVALUE_ENTRY(EXPAND_AUGROUP, "augroup"),
+    KEYVALUE_ENTRY(EXPAND_BEHAVE, "behave"),
+#if defined(FEAT_EVAL)
+    KEYVALUE_ENTRY(EXPAND_BREAKPOINT, "breakpoint"),
+#endif
+    KEYVALUE_ENTRY(EXPAND_BUFFERS, "buffer"),
+    KEYVALUE_ENTRY(EXPAND_COLORS, "color"),
+    KEYVALUE_ENTRY(EXPAND_COMMANDS, "command"),
+    KEYVALUE_ENTRY(EXPAND_COMPILER, "compiler"),
 #if defined(FEAT_CSCOPE)
-    {EXPAND_CSCOPE, "cscope"},
+    KEYVALUE_ENTRY(EXPAND_CSCOPE, "cscope"),
 #endif
 #if defined(FEAT_EVAL)
-    {EXPAND_USER_DEFINED, "custom"},
-    {EXPAND_USER_LIST, "customlist"},
+    KEYVALUE_ENTRY(EXPAND_USER_DEFINED, "custom"),
+    KEYVALUE_ENTRY(EXPAND_USER_LIST, "customlist"),
 #endif
-    {EXPAND_DIFF_BUFFERS, "diff_buffer"},
-    {EXPAND_DIRECTORIES, "dir"},
-    {EXPAND_ENV_VARS, "environment"},
-    {EXPAND_EVENTS, "event"},
-    {EXPAND_EXPRESSION, "expression"},
-    {EXPAND_FILES, "file"},
-    {EXPAND_FILES_IN_PATH, "file_in_path"},
-    {EXPAND_FILETYPE, "filetype"},
-    {EXPAND_FUNCTIONS, "function"},
-    {EXPAND_HELP, "help"},
-    {EXPAND_HIGHLIGHT, "highlight"},
-    {EXPAND_HISTORY, "history"},
+    KEYVALUE_ENTRY(EXPAND_DIFF_BUFFERS, "diff_buffer"),
+    KEYVALUE_ENTRY(EXPAND_DIRECTORIES, "dir"),
+    KEYVALUE_ENTRY(EXPAND_DIRS_IN_CDPATH, "dir_in_path"),
+    KEYVALUE_ENTRY(EXPAND_ENV_VARS, "environment"),
+    KEYVALUE_ENTRY(EXPAND_EVENTS, "event"),
+    KEYVALUE_ENTRY(EXPAND_EXPRESSION, "expression"),
+    KEYVALUE_ENTRY(EXPAND_FILES, "file"),
+    KEYVALUE_ENTRY(EXPAND_FILES_IN_PATH, "file_in_path"),
+    KEYVALUE_ENTRY(EXPAND_FILETYPE, "filetype"),
+    KEYVALUE_ENTRY(EXPAND_FUNCTIONS, "function"),
+    KEYVALUE_ENTRY(EXPAND_HELP, "help"),
+    KEYVALUE_ENTRY(EXPAND_HIGHLIGHT, "highlight"),
+    KEYVALUE_ENTRY(EXPAND_HISTORY, "history"),
+#if defined(FEAT_KEYMAP)
+    KEYVALUE_ENTRY(EXPAND_KEYMAP, "keymap"),
+#endif
 #if defined(HAVE_LOCALE_H) || defined(X_LOCALE)
-    {EXPAND_LOCALES, "locale"},
+    KEYVALUE_ENTRY(EXPAND_LOCALES, "locale"),
 #endif
-    {EXPAND_MAPCLEAR, "mapclear"},
-    {EXPAND_MAPPINGS, "mapping"},
-    {EXPAND_MENUS, "menu"},
-    {EXPAND_MESSAGES, "messages"},
-    {EXPAND_OWNSYNTAX, "syntax"},
-#if defined(FEAT_PROFILE)
-    {EXPAND_SYNTIME, "syntime"},
+    KEYVALUE_ENTRY(EXPAND_MAPCLEAR, "mapclear"),
+    KEYVALUE_ENTRY(EXPAND_MAPPINGS, "mapping"),
+    KEYVALUE_ENTRY(EXPAND_MENUS, "menu"),
+    KEYVALUE_ENTRY(EXPAND_MESSAGES, "messages"),
+    KEYVALUE_ENTRY(EXPAND_SETTINGS, "option"),
+    KEYVALUE_ENTRY(EXPAND_PACKADD, "packadd"),
+    KEYVALUE_ENTRY(EXPAND_RUNTIME, "runtime"),
+#if defined(FEAT_EVAL)
+    KEYVALUE_ENTRY(EXPAND_SCRIPTNAMES, "scriptnames"),
 #endif
-    {EXPAND_SETTINGS, "option"},
-    {EXPAND_PACKADD, "packadd"},
-    {EXPAND_SHELLCMD, "shellcmd"},
+    KEYVALUE_ENTRY(EXPAND_SHELLCMD, "shellcmd"),
+    KEYVALUE_ENTRY(EXPAND_SHELLCMDLINE, "shellcmdline"),
 #if defined(FEAT_SIGNS)
-    {EXPAND_SIGN, "sign"},
+    KEYVALUE_ENTRY(EXPAND_SIGN, "sign"),
 #endif
-    {EXPAND_TAGS, "tag"},
-    {EXPAND_TAGS_LISTFILES, "tag_listfiles"},
-    {EXPAND_USER, "user"},
-    {EXPAND_USER_VARS, "var"},
-    {0, NULL}
+    KEYVALUE_ENTRY(EXPAND_OWNSYNTAX, "syntax"),
+#if defined(FEAT_PROFILE)
+    KEYVALUE_ENTRY(EXPAND_SYNTIME, "syntime"),
+#endif
+    KEYVALUE_ENTRY(EXPAND_TAGS, "tag"),
+    KEYVALUE_ENTRY(EXPAND_TAGS_LISTFILES, "tag_listfiles"),
+    KEYVALUE_ENTRY(EXPAND_USER, "user"),
+    KEYVALUE_ENTRY(EXPAND_USER_VARS, "var")
 };
+
+typedef struct
+{
+    cmd_addr_T key;
+    char *fullname;
+    size_t fullnamelen;
+    char *shortname;
+    size_t shortnamelen;
+} addrtype_T;
 
 /*
  * List of names of address types.  Must be alphabetical for completion.
+ * Must be sorted by the 'fullname' field because it is used by bsearch()!
  */
-static struct
+#define ADDRTYPE_ENTRY(k, fn, sn) \
+	{(k), (fn), STRLEN_LITERAL(fn), (sn), STRLEN_LITERAL(sn)}
+static addrtype_T addr_type_complete_tab[] =
 {
-    cmd_addr_T	expand;
-    char	*name;
-    char	*shortname;
-} addr_type_complete[] =
-{
-    {ADDR_ARGUMENTS, "arguments", "arg"},
-    {ADDR_LINES, "lines", "line"},
-    {ADDR_LOADED_BUFFERS, "loaded_buffers", "load"},
-    {ADDR_TABS, "tabs", "tab"},
-    {ADDR_BUFFERS, "buffers", "buf"},
-    {ADDR_WINDOWS, "windows", "win"},
-    {ADDR_QUICKFIX, "quickfix", "qf"},
-    {ADDR_OTHER, "other", "?"},
-    {ADDR_NONE, NULL, NULL}
+    ADDRTYPE_ENTRY(ADDR_ARGUMENTS, "arguments", "arg"),
+    ADDRTYPE_ENTRY(ADDR_BUFFERS, "buffers", "buf"),
+    ADDRTYPE_ENTRY(ADDR_LINES, "lines", "line"),
+    ADDRTYPE_ENTRY(ADDR_LOADED_BUFFERS, "loaded_buffers", "load"),
+    ADDRTYPE_ENTRY(ADDR_OTHER, "other", "?"),
+    ADDRTYPE_ENTRY(ADDR_QUICKFIX, "quickfix", "qf"),
+    ADDRTYPE_ENTRY(ADDR_TABS, "tabs", "tab"),
+    ADDRTYPE_ENTRY(ADDR_WINDOWS, "windows", "win")
 };
 
-#define UC_BUFFER	1	// -buffer: local to current buffer
+static int cmp_addr_type(const void *a, const void *b);
 
 /*
  * Search for a user command that matches "eap->cmd".
@@ -125,10 +144,10 @@ static struct
     char_u *
 find_ucmd(
     exarg_T	*eap,
-    char_u	*p,	// end of the command (possibly including count)
-    int		*full,	// set to TRUE for a full match
-    expand_T	*xp,	// used for completion, NULL otherwise
-    int		*complp UNUSED)	// completion flags or NULL
+    char_u	*p,	 // end of the command (possibly including count)
+    int		*full,	 // set to TRUE for a full match
+    expand_T	*xp,	 // used for completion, NULL otherwise
+    int		*complp) // completion flags or NULL
 {
     int		len = (int)(p - eap->cmd);
     int		j, k, matchlen = 0;
@@ -143,7 +162,7 @@ find_ucmd(
     /*
      * Look for buffer-local user commands first, then global ones.
      */
-    gap = &curbuf->b_ucmds;
+    gap = &prevwin_curwin()->w_buffer->b_ucmds;
     for (;;)
     {
 	for (j = 0; j < gap->ga_len; ++j)
@@ -229,6 +248,9 @@ find_ucmd(
     return p;
 }
 
+/*
+ * Set completion context for :command
+ */
     char_u *
 set_context_in_user_cmd(expand_T *xp, char_u *arg_in)
 {
@@ -258,19 +280,16 @@ set_context_in_user_cmd(expand_T *xp, char_u *arg_in)
 	    {
 		xp->xp_context = EXPAND_USER_COMPLETE;
 		xp->xp_pattern = p + 1;
-		return NULL;
 	    }
 	    else if (STRNICMP(arg, "nargs", p - arg) == 0)
 	    {
 		xp->xp_context = EXPAND_USER_NARGS;
 		xp->xp_pattern = p + 1;
-		return NULL;
 	    }
 	    else if (STRNICMP(arg, "addr", p - arg) == 0)
 	    {
 		xp->xp_context = EXPAND_USER_ADDR_TYPE;
 		xp->xp_pattern = p + 1;
-		return NULL;
 	    }
 	    return NULL;
 	}
@@ -290,8 +309,57 @@ set_context_in_user_cmd(expand_T *xp, char_u *arg_in)
     return skipwhite(p);
 }
 
+/*
+ * Set the completion context for the argument of a user defined command.
+ */
     char_u *
-get_user_command_name(int idx)
+set_context_in_user_cmdarg(
+	char_u		*cmd UNUSED,
+	char_u		*arg,
+	long		argt,
+	int		context,
+	expand_T	*xp,
+	int		forceit)
+{
+    char_u	*p;
+
+    if (context == EXPAND_NOTHING)
+	return NULL;
+
+    if (argt & EX_XFILE)
+    {
+	// EX_XFILE: file names are handled before this call
+	return NULL;
+    }
+
+#ifdef FEAT_MENU
+    if (context == EXPAND_MENUS)
+	return set_context_in_menu_cmd(xp, cmd, arg, forceit);
+#endif
+    if (context == EXPAND_COMMANDS)
+	return arg;
+    if (context == EXPAND_MAPPINGS)
+	return set_context_in_map_cmd(xp, (char_u *)"map", arg, forceit, FALSE,
+							FALSE, CMD_map);
+    // Find start of last argument.
+    p = arg;
+    while (*p)
+    {
+	if (*p == ' ')
+	    // argument starts after a space
+	    arg = p + 1;
+	else if (*p == '\\' && *(p + 1) != NUL)
+	    ++p; // skip over escaped character
+	MB_PTR_ADV(p);
+    }
+    xp->xp_pattern = arg;
+    xp->xp_context = context;
+
+    return NULL;
+}
+
+    char_u *
+expand_user_command_name(int idx)
 {
     return get_user_commands(NULL, idx - (int)CMD_SIZE);
 }
@@ -303,19 +371,48 @@ get_user_command_name(int idx)
 get_user_commands(expand_T *xp UNUSED, int idx)
 {
     // In cmdwin, the alternative buffer should be used.
-    buf_T *buf =
-#ifdef FEAT_CMDWIN
-	(cmdwin_type != 0 && get_cmdline_type() == NUL) ? prevwin->w_buffer :
-#endif
-	curbuf;
+    buf_T *buf = prevwin_curwin()->w_buffer;
 
     if (idx < buf->b_ucmds.ga_len)
 	return USER_CMD_GA(&buf->b_ucmds, idx)->uc_name;
+
     idx -= buf->b_ucmds.ga_len;
     if (idx < ucmds.ga_len)
-	return USER_CMD(idx)->uc_name;
+    {
+	int	i;
+	char_u  *name = USER_CMD(idx)->uc_name;
+
+	for (i = 0; i < buf->b_ucmds.ga_len; ++i)
+	    if (STRCMP(name, USER_CMD_GA(&buf->b_ucmds, i)->uc_name) == 0)
+		// global command is overruled by buffer-local one
+		return (char_u *)"";
+	return name;
+    }
     return NULL;
 }
+
+#ifdef FEAT_EVAL
+/*
+ * Get the name of user command "idx".  "cmdidx" can be CMD_USER or
+ * CMD_USER_BUF.
+ * Returns NULL if the command is not found.
+ */
+    char_u *
+get_user_command_name(int idx, int cmdidx)
+{
+    if (cmdidx == CMD_USER && idx < ucmds.ga_len)
+	return USER_CMD(idx)->uc_name;
+    if (cmdidx == CMD_USER_BUF)
+    {
+	// In cmdwin, the alternative buffer should be used.
+	buf_T *buf = prevwin_curwin()->w_buffer;
+
+	if (idx < buf->b_ucmds.ga_len)
+	    return USER_CMD_GA(&buf->b_ucmds, idx)->uc_name;
+    }
+    return NULL;
+}
+#endif
 
 /*
  * Function given to ExpandGeneric() to obtain the list of user address type
@@ -324,7 +421,9 @@ get_user_commands(expand_T *xp UNUSED, int idx)
     char_u *
 get_user_cmd_addr_type(expand_T *xp UNUSED, int idx)
 {
-    return (char_u *)addr_type_complete[idx].name;
+    if (idx < 0 || idx >= (int)ARRAY_LENGTH(addr_type_complete_tab))
+	return NULL;
+    return (char_u *)addr_type_complete_tab[idx].fullname;
 }
 
 /*
@@ -336,10 +435,10 @@ get_user_cmd_flags(expand_T *xp UNUSED, int idx)
 {
     static char *user_cmd_flags[] = {
 	"addr", "bang", "bar", "buffer", "complete",
-	"count", "nargs", "range", "register"
+	"count", "nargs", "range", "register", "keepscript"
     };
 
-    if (idx >= (int)(sizeof(user_cmd_flags) / sizeof(user_cmd_flags[0])))
+    if (idx < 0 || idx >= (int)ARRAY_LENGTH(user_cmd_flags))
 	return NULL;
     return (char_u *)user_cmd_flags[idx];
 }
@@ -352,7 +451,7 @@ get_user_cmd_nargs(expand_T *xp UNUSED, int idx)
 {
     static char *user_cmd_nargs[] = {"0", "1", "*", "?", "+"};
 
-    if (idx >= (int)(sizeof(user_cmd_nargs) / sizeof(user_cmd_nargs[0])))
+    if (idx < 0 || idx >= (int)ARRAY_LENGTH(user_cmd_nargs))
 	return NULL;
     return (char_u *)user_cmd_nargs[idx];
 }
@@ -364,20 +463,78 @@ get_user_cmd_nargs(expand_T *xp UNUSED, int idx)
     char_u *
 get_user_cmd_complete(expand_T *xp UNUSED, int idx)
 {
-    return (char_u *)command_complete[idx].name;
+    if (idx < 0 || idx >= (int)ARRAY_LENGTH(command_complete_tab))
+	return NULL;
+    return (char_u *)command_complete_tab[idx].value;
 }
 
-    int
-cmdcomplete_str_to_type(char_u *complete_str)
+/*
+ * Return the row in the command_complete_tab table that contains the given key.
+ */
+    static keyvalue_T *
+get_commandtype(int expand)
 {
     int i;
 
-    for (i = 0; command_complete[i].expand != 0; ++i)
-	if (STRCMP(complete_str, command_complete[i].name) == 0)
-	    return command_complete[i].expand;
+    for (i = 0; i < (int)ARRAY_LENGTH(command_complete_tab); ++i)
+	if (command_complete_tab[i].key == expand)
+	    return &command_complete_tab[i];
 
-    return EXPAND_NOTHING;
+    return NULL;
 }
+
+#ifdef FEAT_EVAL
+/*
+ * Get the name of completion type "expand" as a string.
+ */
+    char_u *
+cmdcomplete_type_to_str(int expand)
+{
+    keyvalue_T *kv;
+
+    kv = get_commandtype(expand);
+
+    return (kv == NULL) ? NULL : (char_u *)kv->value;
+}
+
+/*
+ * Get the index of completion type "complete_str".
+ * Returns EXPAND_NOTHING if no match found.
+ */
+    int
+cmdcomplete_str_to_type(char_u *complete_str)
+{
+    keyvalue_T target;
+    keyvalue_T *entry;
+    static keyvalue_T *last_entry = NULL;	// cached result
+
+    if (STRNCMP(complete_str, "custom,", 7) == 0)
+	return EXPAND_USER_DEFINED;
+    if (STRNCMP(complete_str, "customlist,", 11) == 0)
+	return EXPAND_USER_LIST;
+
+    target.key = 0;
+    target.value = (char *)complete_str;
+    target.length = 0;				// not used, see cmp_keyvalue_value()
+
+    if (last_entry != NULL && cmp_keyvalue_value(&target, last_entry) == 0)
+	entry = last_entry;
+    else
+    {
+	entry = (keyvalue_T *)bsearch(&target,
+	    &command_complete_tab,
+	    ARRAY_LENGTH(command_complete_tab),
+	    sizeof(command_complete_tab[0]),
+	    cmp_keyvalue_value);
+	if (entry == NULL)
+	    return EXPAND_NOTHING;
+
+	last_entry = entry;
+    }
+
+    return entry->key;
+}
+#endif
 
 /*
  * List user commands starting with "name[name_len]".
@@ -392,14 +549,13 @@ uc_list(char_u *name, size_t name_len)
     int		over;
     long	a;
     garray_T	*gap;
+    keyvalue_T	*entry;
+
+    // don't allow for adding or removing user commands here
+    ++ucmd_locked;
 
     // In cmdwin, the alternative buffer should be used.
-    gap =
-#ifdef FEAT_CMDWIN
-	(cmdwin_type != 0 && get_cmdline_type() == NUL) ?
-	&prevwin->w_buffer->b_ucmds :
-#endif
-	&curbuf->b_ucmds;
+    gap = &prevwin_curwin()->w_buffer->b_ucmds;
     for (;;)
     {
 	for (i = 0; i < gap->ga_len; ++i)
@@ -447,7 +603,7 @@ uc_list(char_u *name, size_t name_len)
 		msg_putchar(' ');
 
 	    msg_outtrans_attr(cmd->uc_name, HL_ATTR(HLF_D));
-	    len = (int)STRLEN(cmd->uc_name) + 4;
+	    len = (int)cmd->uc_namelen + 4;
 
 	    do {
 		msg_putchar(' ');
@@ -479,16 +635,14 @@ uc_list(char_u *name, size_t name_len)
 		if (a & EX_COUNT)
 		{
 		    // -count=N
-		    sprintf((char *)IObuff + len, "%ldc", cmd->uc_def);
-		    len += (int)STRLEN(IObuff + len);
+		    len += vim_snprintf((char *)IObuff + len, IOSIZE - len, "%ldc", cmd->uc_def);
 		}
 		else if (a & EX_DFLALL)
 		    IObuff[len++] = '%';
 		else if (cmd->uc_def >= 0)
 		{
 		    // -range=N
-		    sprintf((char *)IObuff + len, "%ld", cmd->uc_def);
-		    len += (int)STRLEN(IObuff + len);
+		    len += vim_snprintf((char *)IObuff + len, IOSIZE - len, "%ld", cmd->uc_def);
 		}
 		else
 		    IObuff[len++] = '.';
@@ -499,12 +653,12 @@ uc_list(char_u *name, size_t name_len)
 	    } while (len < 8 - over);
 
 	    // Address Type
-	    for (j = 0; addr_type_complete[j].expand != ADDR_NONE; ++j)
-		if (addr_type_complete[j].expand != ADDR_LINES
-			&& addr_type_complete[j].expand == cmd->uc_addr_type)
+	    for (j = 0; j < (int)ARRAY_LENGTH(addr_type_complete_tab); ++j)
+		if (addr_type_complete_tab[j].key != ADDR_LINES
+			&& addr_type_complete_tab[j].key == cmd->uc_addr_type)
 		{
-		    STRCPY(IObuff + len, addr_type_complete[j].shortname);
-		    len += (int)STRLEN(IObuff + len);
+		    STRCPY(IObuff + len, addr_type_complete_tab[j].shortname);
+		    len += (int)addr_type_complete_tab[j].shortnamelen;
 		    break;
 		}
 
@@ -513,19 +667,31 @@ uc_list(char_u *name, size_t name_len)
 	    } while (len < 13 - over);
 
 	    // Completion
-	    for (j = 0; command_complete[j].expand != 0; ++j)
-		if (command_complete[j].expand == cmd->uc_compl)
+	    entry = get_commandtype(cmd->uc_compl);
+	    if (entry != NULL)
+	    {
+		STRCPY(IObuff + len, entry->value);
+		len += entry->length;
+#ifdef FEAT_EVAL
+		if (p_verbose > 0 && cmd->uc_compl_arg != NULL)
 		{
-		    STRCPY(IObuff + len, command_complete[j].name);
-		    len += (int)STRLEN(IObuff + len);
-		    break;
+		    size_t uc_compl_arglen = STRLEN(cmd->uc_compl_arg);
+
+		    if (uc_compl_arglen < 200)
+		    {
+			IObuff[len++] = ',';
+			STRCPY(IObuff + len, cmd->uc_compl_arg);
+			len += uc_compl_arglen;
+		    }
 		}
+#endif
+	    }
 
 	    do {
 		IObuff[len++] = ' ';
 	    } while (len < 25 - over);
 
-	    IObuff[len] = '\0';
+	    IObuff[len] = NUL;
 	    msg_outtrans(IObuff);
 
 	    msg_outtrans_special(cmd->uc_rep, FALSE,
@@ -546,6 +712,8 @@ uc_list(char_u *name, size_t name_len)
 
     if (!found)
 	msg(_("No user-defined commands found"));
+
+    --ucmd_locked;
 }
 
     char *
@@ -559,7 +727,7 @@ uc_fun_cmd(void)
 
     for (i = 0; fcmd[i]; ++i)
 	IObuff[i] = fcmd[i] - 0x40;
-    IObuff[i] = 0;
+    IObuff[i] = NUL;
     return (char *)IObuff;
 }
 
@@ -572,31 +740,50 @@ parse_addr_type_arg(
     int		vallen,
     cmd_addr_T	*addr_type_arg)
 {
-    int	    i, a, b;
+    addrtype_T target;
+    addrtype_T *entry;
+    static addrtype_T *last_entry;	// cached result
 
-    for (i = 0; addr_type_complete[i].expand != ADDR_NONE; ++i)
+    target.key = 0;
+    target.fullname = (char *)value;
+    target.fullnamelen = vallen;
+
+    if (last_entry != NULL && cmp_addr_type(&target, last_entry) == 0)
+	entry = last_entry;
+    else
     {
-	a = (int)STRLEN(addr_type_complete[i].name) == vallen;
-	b = STRNCMP(value, addr_type_complete[i].name, vallen) == 0;
-	if (a && b)
+	entry = (addrtype_T *)bsearch(&target,
+	    &addr_type_complete_tab,
+	    ARRAY_LENGTH(addr_type_complete_tab),
+	    sizeof(addr_type_complete_tab[0]),
+	    cmp_addr_type);
+	if (entry == NULL)
 	{
-	    *addr_type_arg = addr_type_complete[i].expand;
-	    break;
+	    int i;
+	    char_u	*err = value;
+
+	    for (i = 0; err[i] != NUL && !VIM_ISWHITE(err[i]); i++)
+		;
+	    err[i] = NUL;
+	    semsg(_(e_invalid_address_type_value_str), err);
+	    return FAIL;
 	}
+
+	last_entry = entry;
     }
 
-    if (addr_type_complete[i].expand == ADDR_NONE)
-    {
-	char_u	*err = value;
-
-	for (i = 0; err[i] != NUL && !VIM_ISWHITE(err[i]); i++)
-	    ;
-	err[i] = NUL;
-	semsg(_("E180: Invalid address type value: %s"), err);
-	return FAIL;
-    }
+    *addr_type_arg = entry->key;
 
     return OK;
+}
+
+    static int
+cmp_addr_type(const void *a, const void *b)
+{
+    addrtype_T *at1 = (addrtype_T *)a;
+    addrtype_T *at2 = (addrtype_T *)b;
+
+    return STRNCMP(at1->fullname, at2->fullname, MAX(at1->fullnamelen, at2->fullnamelen));
 }
 
 /*
@@ -620,6 +807,9 @@ parse_compl_arg(
 # endif
     int		i;
     int		valend = vallen;
+    keyvalue_T	target;
+    keyvalue_T	*entry;
+    static keyvalue_T	*last_entry = NULL;	    // cached result
 
     // Look for any argument part - which is the part after any ','
     for (i = 0; i < vallen; ++i)
@@ -635,35 +825,42 @@ parse_compl_arg(
 	}
     }
 
-    for (i = 0; command_complete[i].expand != 0; ++i)
+    target.key = 0;
+    target.value = (char *)value;
+    target.length = valend;
+
+    if (last_entry != NULL && cmp_keyvalue_value_n(&target, last_entry) == 0)
+	entry = last_entry;
+    else
     {
-	if ((int)STRLEN(command_complete[i].name) == valend
-		&& STRNCMP(value, command_complete[i].name, valend) == 0)
+	entry = (keyvalue_T *)bsearch(&target,
+	    &command_complete_tab,
+	    ARRAY_LENGTH(command_complete_tab),
+	    sizeof(command_complete_tab[0]),
+	    cmp_keyvalue_value_n);
+	if (entry == NULL)
 	{
-	    *complp = command_complete[i].expand;
-	    if (command_complete[i].expand == EXPAND_BUFFERS)
-		*argt |= EX_BUFNAME;
-	    else if (command_complete[i].expand == EXPAND_DIRECTORIES
-		    || command_complete[i].expand == EXPAND_FILES)
-		*argt |= EX_XFILE;
-	    break;
+	    semsg(_(e_invalid_complete_value_str), value);
+	    return FAIL;
 	}
+
+	last_entry = entry;
     }
 
-    if (command_complete[i].expand == 0)
-    {
-	semsg(_("E180: Invalid complete value: %s"), value);
-	return FAIL;
-    }
+    *complp = entry->key;
+    if (*complp == EXPAND_BUFFERS)
+	*argt |= EX_BUFNAME;
+    else if (*complp == EXPAND_DIRECTORIES || *complp == EXPAND_FILES || *complp == EXPAND_SHELLCMDLINE)
+	*argt |= EX_XFILE;
 
+    if (
 # if defined(FEAT_EVAL)
-    if (*complp != EXPAND_USER_DEFINED && *complp != EXPAND_USER_LIST
-							       && arg != NULL)
-# else
-    if (arg != NULL)
+	*complp != EXPAND_USER_DEFINED && *complp != EXPAND_USER_LIST
+								&&
 # endif
+								arg != NULL)
     {
-	emsg(_("E468: Completion argument only allowed for custom completion"));
+	emsg(_(e_completion_argument_only_allowed_for_custom_completion));
 	return FAIL;
     }
 
@@ -671,13 +868,14 @@ parse_compl_arg(
     if ((*complp == EXPAND_USER_DEFINED || *complp == EXPAND_USER_LIST)
 							       && arg == NULL)
     {
-	emsg(_("E467: Custom completion requires a function argument"));
+	emsg(_(e_custom_completion_requires_function_argument));
 	return FAIL;
     }
 
     if (arg != NULL)
 	*compl_arg = vim_strnsave(arg, arglen);
 # endif
+
     return OK;
 }
 
@@ -700,7 +898,7 @@ uc_scan_attr(
 
     if (len == 0)
     {
-	emsg(_("E175: No attribute specified"));
+	emsg(_(e_no_attribute_specified));
 	return FAIL;
     }
 
@@ -711,6 +909,8 @@ uc_scan_attr(
 	*flags |= UC_BUFFER;
     else if (STRNICMP(attr, "register", len) == 0)
 	*argt |= EX_REGSTR;
+    else if (STRNICMP(attr, "keepscript", len) == 0)
+	*argt |= EX_KEEPSCRIPT;
     else if (STRNICMP(attr, "bar", len) == 0)
 	*argt |= EX_TRLBAR;
     else
@@ -753,7 +953,7 @@ uc_scan_attr(
 	    else
 	    {
 wrong_nargs:
-		emsg(_("E176: Invalid number of arguments"));
+		emsg(_(e_invalid_number_of_arguments));
 		return FAIL;
 	    }
 	}
@@ -768,7 +968,7 @@ wrong_nargs:
 		if (*def >= 0)
 		{
 two_count:
-		    emsg(_("E177: Count cannot be specified twice"));
+		    emsg(_(e_count_cannot_be_specified_twice));
 		    return FAIL;
 		}
 
@@ -778,7 +978,7 @@ two_count:
 		if (p != val + vallen || vallen == 0)
 		{
 invalid_count:
-		    emsg(_("E178: Invalid default value for count"));
+		    emsg(_(e_invalid_default_value_for_count));
 		    return FAIL;
 		}
 	    }
@@ -812,7 +1012,7 @@ invalid_count:
 	{
 	    if (val == NULL)
 	    {
-		emsg(_("E179: argument required for -complete"));
+		semsg(_(e_argument_required_for_str), "-complete");
 		return FAIL;
 	    }
 
@@ -825,7 +1025,7 @@ invalid_count:
 	    *argt |= EX_RANGE;
 	    if (val == NULL)
 	    {
-		emsg(_("E179: argument required for -addr"));
+		semsg(_(e_argument_required_for_str), "-addr");
 		return FAIL;
 	    }
 	    if (parse_addr_type_arg(val, (int)vallen, addr_type_arg) == FAIL)
@@ -837,7 +1037,7 @@ invalid_count:
 	{
 	    char_u ch = attr[len];
 	    attr[len] = '\0';
-	    semsg(_("E181: Invalid attribute: %s"), attr);
+	    semsg(_(e_invalid_attribute_str), attr);
 	    attr[len] = ch;
 	    return FAIL;
 	}
@@ -869,13 +1069,13 @@ uc_add_command(
     char_u	*rep_buf = NULL;
     garray_T	*gap;
 
-    replace_termcodes(rep, &rep_buf, 0, NULL);
+    replace_termcodes(rep, &rep_buf, 0, 0, NULL);
     if (rep_buf == NULL)
     {
-	// Can't replace termcodes - try using the string as is
+	// can't replace termcodes - try using the string as is
 	rep_buf = vim_strsave(rep);
 
-	// Give up if out of memory
+	// give up if out of memory
 	if (rep_buf == NULL)
 	    return FAIL;
     }
@@ -885,7 +1085,7 @@ uc_add_command(
     {
 	gap = &curbuf->b_ucmds;
 	if (gap->ga_itemsize == 0)
-	    ga_init2(gap, (int)sizeof(ucmd_T), 4);
+	    ga_init2(gap, sizeof(ucmd_T), 4);
     }
     else
 	gap = &ucmds;
@@ -893,16 +1093,13 @@ uc_add_command(
     // Search for the command in the already defined commands.
     for (i = 0; i < gap->ga_len; ++i)
     {
-	size_t len;
-
 	cmd = USER_CMD_GA(gap, i);
-	len = STRLEN(cmd->uc_name);
 	cmp = STRNCMP(name, cmd->uc_name, name_len);
 	if (cmp == 0)
 	{
-	    if (name_len < len)
+	    if (name_len < cmd->uc_namelen)
 		cmp = -1;
-	    else if (name_len > len)
+	    else if (name_len > cmd->uc_namelen)
 		cmp = 1;
 	}
 
@@ -917,7 +1114,7 @@ uc_add_command(
 #endif
 		    )
 	    {
-		semsg(_("E174: Command already exists: add ! to replace it: %s"),
+		semsg(_(e_command_already_exists_add_bang_to_replace_it_str),
 									 name);
 		goto fail;
 	    }
@@ -937,7 +1134,7 @@ uc_add_command(
     // Extend the array unless we're replacing an existing command
     if (cmp != 0)
     {
-	if (ga_grow(gap, 1) != OK)
+	if (ga_grow(gap, 1) == FAIL)
 	    goto fail;
 	if ((p = vim_strnsave(name, name_len)) == NULL)
 	    goto fail;
@@ -948,14 +1145,18 @@ uc_add_command(
 	++gap->ga_len;
 
 	cmd->uc_name = p;
+	cmd->uc_namelen = name_len;
     }
 
     cmd->uc_rep = rep_buf;
     cmd->uc_argt = argt;
     cmd->uc_def = def;
     cmd->uc_compl = compl;
-#ifdef FEAT_EVAL
     cmd->uc_script_ctx = current_sctx;
+    if (flags & UC_VIM9)
+	cmd->uc_script_ctx.sc_version = SCRIPT_VERSION_VIM9;
+    cmd->uc_flags = flags & UC_VIM9;
+#ifdef FEAT_EVAL
     cmd->uc_script_ctx.sc_lnum += SOURCING_LNUM;
     cmd->uc_compl_arg = compl_arg;
 #endif
@@ -969,6 +1170,52 @@ fail:
     vim_free(compl_arg);
 #endif
     return FAIL;
+}
+
+/*
+ * If "p" starts with "{" then read a block of commands until "}".
+ * Used for ":command" and ":autocmd".
+ */
+    char_u *
+may_get_cmd_block(exarg_T *eap, char_u *p, char_u **tofree, int *flags)
+{
+    char_u *retp = p;
+
+    if (*p == '{' && ends_excmd2(eap->arg, skipwhite(p + 1))
+						    && eap->ea_getline != NULL)
+    {
+	garray_T    ga;
+	char_u	    *line = NULL;
+
+	ga_init2(&ga, sizeof(char_u *), 10);
+	if (ga_copy_string(&ga, p) == FAIL)
+	    return retp;
+
+	// If the argument ends in "}" it must have been concatenated already
+	// for ISN_EXEC.
+	if (p[STRLEN(p) - 1] != '}')
+	    // Read lines between '{' and '}'.  Does not support nesting or
+	    // here-doc constructs.
+	    for (;;)
+	    {
+		vim_free(line);
+		if ((line = eap->ea_getline(':', eap->cookie,
+					   0, GETLINE_CONCAT_CONTBAR)) == NULL)
+		{
+		    emsg(_(e_missing_rcurly));
+		    break;
+		}
+		if (ga_copy_string(&ga, line) == FAIL)
+		    break;
+		if (*skipwhite(line) == '}')
+		    break;
+	    }
+	vim_free(line);
+	retp = *tofree = ga_concat_strings(&ga, "\n");
+	ga_clear_strings(&ga);
+	*flags |= UC_VIM9;
+    }
+    return retp;
 }
 
 /*
@@ -998,7 +1245,7 @@ ex_command(exarg_T *eap)
 	end = skiptowhite(p);
 	if (uc_scan_attr(p, end - p, &argt, &def, &flags, &compl,
 					   &compl_arg, &addr_type_arg) == FAIL)
-	    return;
+	    goto theend;
 	p = skipwhite(end);
     }
 
@@ -1009,8 +1256,8 @@ ex_command(exarg_T *eap)
 	    ++p;
     if (!ends_excmd2(eap->arg, p) && !VIM_ISWHITE(*p))
     {
-	emsg(_("E182: Invalid command name"));
-	return;
+	emsg(_(e_invalid_command_name));
+	goto theend;
     }
     end = p;
     name_len = (int)(end - name);
@@ -1020,23 +1267,44 @@ ex_command(exarg_T *eap)
     p = skipwhite(end);
     if (!has_attr && ends_excmd2(eap->arg, p))
     {
-	uc_list(name, end - name);
+	uc_list(name, name_len);
     }
     else if (!ASCII_ISUPPER(*name))
     {
-	emsg(_("E183: User defined commands must start with an uppercase letter"));
-	return;
+	emsg(_(e_user_defined_commands_must_start_with_an_uppercase_letter));
     }
     else if ((name_len == 1 && *name == 'X')
 	  || (name_len <= 4
 		  && STRNCMP(name, "Next", name_len > 4 ? 4 : name_len) == 0))
     {
-	emsg(_("E841: Reserved name, cannot be used for user defined command"));
-	return;
+	emsg(_(e_reserved_name_cannot_be_used_for_user_defined_command));
+    }
+    else if (compl > 0 && (argt & EX_EXTRA) == 0)
+    {
+	// Some plugins rely on silently ignoring the mistake, only make this
+	// an error in Vim9 script.
+	if (in_vim9script())
+	    emsg(_(e_complete_used_without_allowing_arguments));
+	else
+	    give_warning_with_source(
+		       (char_u *)_(e_complete_used_without_allowing_arguments),
+								   TRUE, TRUE);
     }
     else
+    {
+	char_u *tofree = NULL;
+
+	p = may_get_cmd_block(eap, p, &tofree, &flags);
+
 	uc_add_command(name, end - name, p, argt, def, flags, compl, compl_arg,
 						  addr_type_arg, eap->forceit);
+	vim_free(tofree);
+
+	return;  // success
+    }
+
+theend:
+    vim_free(compl_arg);
 }
 
 /*
@@ -1052,6 +1320,21 @@ ex_comclear(exarg_T *eap UNUSED)
 }
 
 /*
+ * If ucmd_locked is set give an error and return TRUE.
+ * Otherwise return FALSE.
+ */
+    static int
+is_ucmd_locked(void)
+{
+    if (ucmd_locked > 0)
+    {
+	emsg(_(e_cannot_change_user_commands_while_listing));
+	return TRUE;
+    }
+    return FALSE;
+}
+
+/*
  * Clear all user commands for "gap".
  */
     void
@@ -1060,10 +1343,14 @@ uc_clear(garray_T *gap)
     int		i;
     ucmd_T	*cmd;
 
+    if (is_ucmd_locked())
+	return;
+
     for (i = 0; i < gap->ga_len; ++i)
     {
 	cmd = USER_CMD_GA(gap, i);
 	vim_free(cmd->uc_name);
+	cmd->uc_namelen = 0;
 	vim_free(cmd->uc_rep);
 # if defined(FEAT_EVAL)
 	vim_free(cmd->uc_compl_arg);
@@ -1080,8 +1367,16 @@ ex_delcommand(exarg_T *eap)
 {
     int		i = 0;
     ucmd_T	*cmd = NULL;
-    int		cmp = -1;
+    int		res = -1;
     garray_T	*gap;
+    char_u	*arg = eap->arg;
+    int		buffer_only = FALSE;
+
+    if (STRNCMP(arg, "-buffer", 7) == 0 && VIM_ISWHITE(arg[7]))
+    {
+	buffer_only = TRUE;
+	arg = skipwhite(arg + 7);
+    }
 
     gap = &curbuf->b_ucmds;
     for (;;)
@@ -1089,20 +1384,25 @@ ex_delcommand(exarg_T *eap)
 	for (i = 0; i < gap->ga_len; ++i)
 	{
 	    cmd = USER_CMD_GA(gap, i);
-	    cmp = STRCMP(eap->arg, cmd->uc_name);
-	    if (cmp <= 0)
+	    res = STRCMP(arg, cmd->uc_name);
+	    if (res <= 0)
 		break;
 	}
-	if (gap == &ucmds || cmp == 0)
+	if (gap == &ucmds || res == 0 || buffer_only)
 	    break;
 	gap = &ucmds;
     }
 
-    if (cmp != 0)
+    if (res != 0)
     {
-	semsg(_("E184: No such user-defined command: %s"), eap->arg);
+	semsg(_(buffer_only
+		    ? e_no_such_user_defined_command_in_current_buffer_str
+		    : e_no_such_user_defined_command_str), arg);
 	return;
     }
+
+    if (is_ucmd_locked())
+	return;
 
     vim_free(cmd->uc_name);
     vim_free(cmd->uc_rep);
@@ -1153,7 +1453,7 @@ uc_split_args(char_u *arg, size_t *lenp)
 	    p = skipwhite(p);
 	    if (*p == NUL)
 		break;
-	    len += 3; // ","
+	    len += 4; // ", "
 	}
 	else
 	{
@@ -1199,6 +1499,7 @@ uc_split_args(char_u *arg, size_t *lenp)
 		break;
 	    *q++ = '"';
 	    *q++ = ',';
+	    *q++ = ' ';
 	    *q++ = '"';
 	}
 	else
@@ -1207,61 +1508,179 @@ uc_split_args(char_u *arg, size_t *lenp)
 	}
     }
     *q++ = '"';
-    *q = 0;
+    *q = NUL;
 
     *lenp = len;
     return buf;
 }
 
     static size_t
-add_cmd_modifier(char_u *buf, char *mod_str, int *multi_mods)
+add_cmd_modifier(char_u *buf, size_t buflen, char *mod_str, size_t mod_strlen, int *multi_mods)
 {
-    size_t result;
-
-    result = STRLEN(mod_str);
-    if (*multi_mods)
-	result += 1;
     if (buf != NULL)
     {
 	if (*multi_mods)
-	    STRCAT(buf, " ");
-	STRCAT(buf, mod_str);
+	{
+	    STRCPY(buf + buflen, " ");	// the separating space
+	    ++buflen;
+	}
+	STRCPY(buf + buflen, mod_str);
     }
 
-    *multi_mods = 1;
+    if (*multi_mods)
+	++mod_strlen;			// +1 for the separating space
+    else
+	*multi_mods = 1;
 
-    return result;
+    return mod_strlen;
 }
 
 /*
- * Add modifiers from "cmdmod.split" to "buf".  Set "multi_mods" when one was
- * added.  Return the number of bytes added.
+ * Add modifiers from "cmod->cmod_split" to "buf".  Set "multi_mods" when one
+ * was added.  Return the number of bytes added.
  */
     size_t
-add_win_cmd_modifers(char_u *buf, int *multi_mods)
+add_win_cmd_modifiers(char_u *buf, cmdmod_T *cmod, int *multi_mods)
 {
-    size_t result = 0;
+    size_t buflen = 0;
 
     // :aboveleft and :leftabove
-    if (cmdmod.split & WSP_ABOVE)
-	result += add_cmd_modifier(buf, "aboveleft", multi_mods);
+    if (cmod->cmod_split & WSP_ABOVE)
+	buflen += add_cmd_modifier(buf, buflen, "aboveleft", STRLEN_LITERAL("aboveleft"), multi_mods);
     // :belowright and :rightbelow
-    if (cmdmod.split & WSP_BELOW)
-	result += add_cmd_modifier(buf, "belowright", multi_mods);
+    if (cmod->cmod_split & WSP_BELOW)
+	buflen += add_cmd_modifier(buf, buflen, "belowright", STRLEN_LITERAL("belowright"), multi_mods);
     // :botright
-    if (cmdmod.split & WSP_BOT)
-	result += add_cmd_modifier(buf, "botright", multi_mods);
+    if (cmod->cmod_split & WSP_BOT)
+	buflen += add_cmd_modifier(buf, buflen, "botright", STRLEN_LITERAL("botright"), multi_mods);
 
     // :tab
-    if (cmdmod.tab > 0)
-	result += add_cmd_modifier(buf, "tab", multi_mods);
+    if (cmod->cmod_tab > 0)
+    {
+	int tabnr = cmod->cmod_tab - 1;
+
+	if (tabnr == tabpage_index(curtab))
+	{
+	    // For compatibility, don't add a tabpage number if it is the same
+	    // as the default number for :tab.
+	    buflen += add_cmd_modifier(buf, buflen, "tab", STRLEN_LITERAL("tab"), multi_mods);
+	}
+	else
+	{
+	    char tab_buf[NUMBUFLEN + 3];
+	    size_t tab_buflen;
+
+	    tab_buflen = vim_snprintf(tab_buf, sizeof(tab_buf), "%dtab", tabnr);
+	    buflen += add_cmd_modifier(buf, buflen, tab_buf, tab_buflen, multi_mods);
+	}
+    }
+
     // :topleft
-    if (cmdmod.split & WSP_TOP)
-	result += add_cmd_modifier(buf, "topleft", multi_mods);
+    if (cmod->cmod_split & WSP_TOP)
+	buflen += add_cmd_modifier(buf, buflen, "topleft", STRLEN_LITERAL("topleft"), multi_mods);
     // :vertical
-    if (cmdmod.split & WSP_VERT)
-	result += add_cmd_modifier(buf, "vertical", multi_mods);
-    return result;
+    if (cmod->cmod_split & WSP_VERT)
+	buflen += add_cmd_modifier(buf, buflen, "vertical", STRLEN_LITERAL("vertical"), multi_mods);
+    // :horizontal
+    if (cmod->cmod_split & WSP_HOR)
+	buflen += add_cmd_modifier(buf, buflen, "horizontal", STRLEN_LITERAL("horizontal"), multi_mods);
+
+    return buflen;
+}
+
+/*
+ * Generate text for the "cmod" command modifiers.
+ * If "buf" is NULL just return the length.
+ */
+    size_t
+produce_cmdmods(char_u *buf, cmdmod_T *cmod, int quote)
+{
+    size_t  buflen = 0;
+    int	    multi_mods = 0;
+    int	    i;
+    static keyvalue_T mod_entry_tab[] =
+    {
+#ifdef FEAT_BROWSE_CMD
+	KEYVALUE_ENTRY(CMOD_BROWSE, "browse"),
+#endif
+#if defined(FEAT_GUI_DIALOG) || defined(FEAT_CON_DIALOG)
+	KEYVALUE_ENTRY(CMOD_CONFIRM, "confirm"),
+#endif
+	KEYVALUE_ENTRY(CMOD_HIDE, "hide"),
+	KEYVALUE_ENTRY(CMOD_KEEPALT, "keepalt"),
+	KEYVALUE_ENTRY(CMOD_KEEPJUMPS, "keepjumps"),
+	KEYVALUE_ENTRY(CMOD_KEEPMARKS, "keepmarks"),
+	KEYVALUE_ENTRY(CMOD_KEEPPATTERNS, "keeppatterns"),
+	KEYVALUE_ENTRY(CMOD_LOCKMARKS, "lockmarks"),
+	KEYVALUE_ENTRY(CMOD_NOSWAPFILE, "noswapfile"),
+	KEYVALUE_ENTRY(CMOD_UNSILENT, "unsilent"),
+	KEYVALUE_ENTRY(CMOD_NOAUTOCMD, "noautocmd"),
+#ifdef HAVE_SANDBOX
+	KEYVALUE_ENTRY(CMOD_SANDBOX, "sandbox"),
+#endif
+	KEYVALUE_ENTRY(CMOD_LEGACY, "legacy")
+    };
+
+    if (quote)
+    {
+	++buflen;
+	if (buf != NULL)
+	{
+	    *buf = '"';
+	    *(buf + buflen) = NUL;
+	}
+    }
+    else
+    if (buf != NULL)
+	*buf = NUL;
+
+    // the modifiers that are simple flags
+    for (i = 0; i < (int)ARRAY_LENGTH(mod_entry_tab); ++i)
+	if (cmod->cmod_flags & mod_entry_tab[i].key)
+	    buflen += add_cmd_modifier(buf, buflen, mod_entry_tab[i].value, mod_entry_tab[i].length, &multi_mods);
+
+    // :silent
+    if (cmod->cmod_flags & CMOD_SILENT)
+    {
+	if (cmod->cmod_flags & CMOD_ERRSILENT)
+	    buflen += add_cmd_modifier(buf, buflen, "silent!", STRLEN_LITERAL("silent!"), &multi_mods);
+	else
+	    buflen += add_cmd_modifier(buf, buflen, "silent", STRLEN_LITERAL("silent"), &multi_mods);
+    }
+
+    // :verbose
+    if (cmod->cmod_verbose > 0)
+    {
+	int verbose_value = cmod->cmod_verbose - 1;
+
+	if (verbose_value == 1)
+	    buflen += add_cmd_modifier(buf, buflen, "verbose", STRLEN_LITERAL("verbose"), &multi_mods);
+	else
+	{
+	    char verbose_buf[NUMBUFLEN];
+	    size_t verbose_buflen;
+
+	    verbose_buflen = vim_snprintf(verbose_buf, sizeof(verbose_buf), "%dverbose", verbose_value);
+	    buflen += add_cmd_modifier(buf, buflen, verbose_buf, verbose_buflen, &multi_mods);
+	}
+    }
+
+    // flags from cmod->cmod_split
+    buflen += add_win_cmd_modifiers((buf == NULL) ? NULL : buf + buflen, cmod, &multi_mods);
+
+    if (quote)
+    {
+	if (buf == NULL)
+	    ++buflen;
+	else
+	{
+	    *(buf + buflen) = '"';
+	    ++buflen;
+	    *(buf + buflen) = NUL;
+	}
+    }
+
+    return buflen;
 }
 
 /*
@@ -1422,15 +1841,14 @@ uc_check_code(
     case ct_RANGE:
     case ct_COUNT:
     {
-	char num_buf[20];
+	char num_buf[NUMBUFLEN];
 	long num = (type == ct_LINE1) ? eap->line1 :
 		   (type == ct_LINE2) ? eap->line2 :
 		   (type == ct_RANGE) ? eap->addr_count :
 		   (eap->addr_count > 0) ? eap->line2 : cmd->uc_def;
 	size_t num_len;
 
-	sprintf(num_buf, "%ld", num);
-	num_len = STRLEN(num_buf);
+	num_len = vim_snprintf(num_buf, sizeof(num_buf), "%ld", num);
 	result = num_len;
 
 	if (quote)
@@ -1451,62 +1869,7 @@ uc_check_code(
 
     case ct_MODS:
     {
-	int multi_mods = 0;
-	typedef struct {
-	    int *varp;
-	    char *name;
-	} mod_entry_T;
-	static mod_entry_T mod_entries[] = {
-#ifdef FEAT_BROWSE_CMD
-	    {&cmdmod.browse, "browse"},
-#endif
-#if defined(FEAT_GUI_DIALOG) || defined(FEAT_CON_DIALOG)
-	    {&cmdmod.confirm, "confirm"},
-#endif
-	    {&cmdmod.hide, "hide"},
-	    {&cmdmod.keepalt, "keepalt"},
-	    {&cmdmod.keepjumps, "keepjumps"},
-	    {&cmdmod.keepmarks, "keepmarks"},
-	    {&cmdmod.keeppatterns, "keeppatterns"},
-	    {&cmdmod.lockmarks, "lockmarks"},
-	    {&cmdmod.noswapfile, "noswapfile"},
-	    {NULL, NULL}
-	};
-	int i;
-
-	result = quote ? 2 : 0;
-	if (buf != NULL)
-	{
-	    if (quote)
-		*buf++ = '"';
-	    *buf = '\0';
-	}
-
-	// the modifiers that are simple flags
-	for (i = 0; mod_entries[i].varp != NULL; ++i)
-	    if (*mod_entries[i].varp)
-		result += add_cmd_modifier(buf, mod_entries[i].name,
-								 &multi_mods);
-
-	// TODO: How to support :noautocmd?
-#ifdef HAVE_SANDBOX
-	// TODO: How to support :sandbox?
-#endif
-	// :silent
-	if (msg_silent > 0)
-	    result += add_cmd_modifier(buf,
-		    emsg_silent > 0 ? "silent!" : "silent", &multi_mods);
-	// TODO: How to support :unsilent?
-	// :verbose
-	if (p_verbose > 0)
-	    result += add_cmd_modifier(buf, "verbose", &multi_mods);
-	// flags from cmdmod.split
-	result += add_win_cmd_modifers(buf, &multi_mods);
-	if (quote && buf != NULL)
-	{
-	    buf += result - 2;
-	    *buf = '"';
-	}
+	result = produce_cmdmods(buf, &cmdmod, quote);
 	break;
     }
 
@@ -1560,14 +1923,16 @@ do_ucmd(exarg_T *eap)
     size_t	split_len = 0;
     char_u	*split_buf = NULL;
     ucmd_T	*cmd;
+    sctx_T	save_current_sctx;
+    int		restore_current_sctx = FALSE;
 #ifdef FEAT_EVAL
-    sctx_T	save_current_sctx = current_sctx;
+    int		restore_script_version = 0;
 #endif
 
     if (eap->cmdidx == CMD_USER)
 	cmd = USER_CMD(eap->useridx);
     else
-	cmd = USER_CMD_GA(&curbuf->b_ucmds, eap->useridx);
+	cmd = USER_CMD_GA(&prevwin_curwin()->w_buffer->b_ucmds, eap->useridx);
 
     /*
      * Replace <> in the command by the arguments.
@@ -1661,15 +2026,38 @@ do_ucmd(exarg_T *eap)
 	}
     }
 
+    if ((cmd->uc_argt & EX_KEEPSCRIPT) == 0)
+    {
+	restore_current_sctx = TRUE;
+	save_current_sctx = current_sctx;
+	current_sctx.sc_version = cmd->uc_script_ctx.sc_version;
 #ifdef FEAT_EVAL
-    current_sctx.sc_sid = cmd->uc_script_ctx.sc_sid;
-    current_sctx.sc_version = cmd->uc_script_ctx.sc_version;
+	current_sctx.sc_sid = cmd->uc_script_ctx.sc_sid;
+	if (cmd->uc_flags & UC_VIM9)
+	{
+	    // In a {} block variables use Vim9 script rules, even in a legacy
+	    // script.
+	    restore_script_version =
+				  SCRIPT_ITEM(current_sctx.sc_sid)->sn_version;
+	    SCRIPT_ITEM(current_sctx.sc_sid)->sn_version = SCRIPT_VERSION_VIM9;
+	}
 #endif
-    (void)do_cmdline(buf, eap->getline, eap->cookie,
+    }
+
+    (void)do_cmdline(buf, eap->ea_getline, eap->cookie,
 				   DOCMD_VERBOSE|DOCMD_NOWAIT|DOCMD_KEYTYPED);
+
+    // Careful: Do not use "cmd" here, it may have become invalid if a user
+    // command was added.
+    if (restore_current_sctx)
+    {
 #ifdef FEAT_EVAL
-    current_sctx = save_current_sctx;
+	if (restore_script_version != 0)
+	    SCRIPT_ITEM(current_sctx.sc_sid)->sn_version =
+							restore_script_version;
 #endif
+	current_sctx = save_current_sctx;
+    }
     vim_free(buf);
     vim_free(split_buf);
 }

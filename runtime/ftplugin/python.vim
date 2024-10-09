@@ -1,9 +1,9 @@
 " Vim filetype plugin file
 " Language:	python
-" Maintainer:	Tom Picton <tom@tompicton.co.uk>
+" Maintainer:	Tom Picton <tom@tompicton.com>
 " Previous Maintainer: James Sully <sullyj3@gmail.com>
 " Previous Maintainer: Johannes Zellner <johannes@zellner.org>
-" Last Change:	Sun 17 Mar 2019
+" Last Change:	2024/05/13
 " https://github.com/tpict/vim-ftplugin-python
 
 if exists("b:did_ftplugin") | finish | endif
@@ -14,6 +14,7 @@ set cpo&vim
 setlocal cinkeys-=0#
 setlocal indentkeys-=0#
 setlocal include=^\\s*\\(from\\\|import\\)
+setlocal define=^\\s*\\(\\(async\\s\\+\\)\\?def\\\|class\\)
 
 " For imports with leading .., append / and replace additional .s with ../
 let b:grandparent_match = '^\(.\.\)\(\.*\)'
@@ -38,7 +39,7 @@ setlocal comments=b:#,fb:-
 setlocal commentstring=#\ %s
 
 if has('python3')
-  setlocal omnifunc=python3complete#Complete 
+  setlocal omnifunc=python3complete#Complete
 elseif has('python')
   setlocal omnifunc=pythoncomplete#Complete
 endif
@@ -55,14 +56,14 @@ let b:next_end='\v\S\n*(%$\|^(\s*\n*)*(class\|def\|async def)\|^\S)'
 let b:prev_end='\v\S\n*(^(\s*\n*)*(class\|def\|async def)\|^\S)'
 
 if !exists('g:no_plugin_maps') && !exists('g:no_python_maps')
-    execute "nnoremap <silent> <buffer> ]] :call <SID>Python_jump('n', '". b:next_toplevel."', 'W', v:count1)<cr>"
-    execute "nnoremap <silent> <buffer> [[ :call <SID>Python_jump('n', '". b:prev_toplevel."', 'Wb', v:count1)<cr>"
-    execute "nnoremap <silent> <buffer> ][ :call <SID>Python_jump('n', '". b:next_endtoplevel."', 'W', v:count1, 0)<cr>"
-    execute "nnoremap <silent> <buffer> [] :call <SID>Python_jump('n', '". b:prev_endtoplevel."', 'Wb', v:count1, 0)<cr>"
-    execute "nnoremap <silent> <buffer> ]m :call <SID>Python_jump('n', '". b:next."', 'W', v:count1)<cr>"
-    execute "nnoremap <silent> <buffer> [m :call <SID>Python_jump('n', '". b:prev."', 'Wb', v:count1)<cr>"
-    execute "nnoremap <silent> <buffer> ]M :call <SID>Python_jump('n', '". b:next_end."', 'W', v:count1, 0)<cr>"
-    execute "nnoremap <silent> <buffer> [M :call <SID>Python_jump('n', '". b:prev_end."', 'Wb', v:count1, 0)<cr>"
+    execute "nnoremap <silent> <buffer> ]] :<C-U>call <SID>Python_jump('n', '". b:next_toplevel."', 'W', v:count1)<cr>"
+    execute "nnoremap <silent> <buffer> [[ :<C-U>call <SID>Python_jump('n', '". b:prev_toplevel."', 'Wb', v:count1)<cr>"
+    execute "nnoremap <silent> <buffer> ][ :<C-U>call <SID>Python_jump('n', '". b:next_endtoplevel."', 'W', v:count1, 0)<cr>"
+    execute "nnoremap <silent> <buffer> [] :<C-U>call <SID>Python_jump('n', '". b:prev_endtoplevel."', 'Wb', v:count1, 0)<cr>"
+    execute "nnoremap <silent> <buffer> ]m :<C-U>call <SID>Python_jump('n', '". b:next."', 'W', v:count1)<cr>"
+    execute "nnoremap <silent> <buffer> [m :<C-U>call <SID>Python_jump('n', '". b:prev."', 'Wb', v:count1)<cr>"
+    execute "nnoremap <silent> <buffer> ]M :<C-U>call <SID>Python_jump('n', '". b:next_end."', 'W', v:count1, 0)<cr>"
+    execute "nnoremap <silent> <buffer> [M :<C-U>call <SID>Python_jump('n', '". b:prev_end."', 'Wb', v:count1, 0)<cr>"
 
     execute "onoremap <silent> <buffer> ]] :call <SID>Python_jump('o', '". b:next_toplevel."', 'W', v:count1)<cr>"
     execute "onoremap <silent> <buffer> [[ :call <SID>Python_jump('o', '". b:prev_toplevel."', 'Wb', v:count1)<cr>"
@@ -109,41 +110,28 @@ if !exists('*<SID>Python_jump')
 endif
 
 if has("browsefilter") && !exists("b:browsefilter")
-    let b:browsefilter = "Python Files (*.py)\t*.py\n" .
-                \ "All Files (*.*)\t*.*\n"
+    let b:browsefilter = "Python Files (*.py)\t*.py\n"
+    if has("win32")
+	let b:browsefilter .= "All Files (*.*)\t*\n"
+    else
+	let b:browsefilter .= "All Files (*)\t*\n"
+    endif
 endif
 
 if !exists("g:python_recommended_style") || g:python_recommended_style != 0
     " As suggested by PEP8.
-    setlocal expandtab shiftwidth=4 softtabstop=4 tabstop=8
+    setlocal expandtab tabstop=4 softtabstop=4 shiftwidth=4
 endif
 
-" First time: try finding "pydoc".
-if !exists('g:pydoc_executable')
-    if executable('pydoc')
-        let g:pydoc_executable = 1
-    else
-        let g:pydoc_executable = 0
-    endif
-endif
-
-" Windows-specific pydoc setup
-if has('win32') || has('win64')
-    if executable('python')
-        " available as Tools\scripts\pydoc.py
-        let g:pydoc_executable = 1
-    else
-        let g:pydoc_executable = 0
-    endif
-endif
-
-" If "pydoc" was found use it for keywordprg.
-if g:pydoc_executable
-    if has('win32') || has('win64')
-        setlocal keywordprg=python\ -m\ pydoc\ 
-    else
-        setlocal keywordprg=pydoc
-    endif
+" Use pydoc for keywordprg.
+" Unix users preferentially get pydoc3, then pydoc2.
+" Windows doesn't have a standalone pydoc executable in $PATH by default, nor
+" does it have separate python2/3 executables, so Windows users just get
+" whichever version corresponds to their installed Python version.
+if executable('python3')
+  setlocal keywordprg=python3\ -m\ pydoc
+elseif executable('python')
+  setlocal keywordprg=python\ -m\ pydoc
 endif
 
 " Script for filetype switching to undo the local stuff we may have changed

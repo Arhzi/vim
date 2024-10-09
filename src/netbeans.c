@@ -54,7 +54,7 @@ static void special_keys(char_u *args);
 static int getConnInfo(char *file, char **host, char **port, char **password);
 
 static void nb_init_graphics(void);
-static void coloncmd(char *cmd, ...);
+static void coloncmd(char *cmd, ...) ATTRIBUTE_FORMAT_PRINTF(1, 2);
 static void nb_set_curbuf(buf_T *buf);
 static void nb_parse_cmd(char_u *);
 static int  nb_do_cmd(int, char_u *, int, int, char_u *);
@@ -116,7 +116,7 @@ netbeans_close(void)
     // remove all signs and update the screen after gutter removal
     coloncmd(":sign unplace *");
     changed_window_setting();
-    update_screen(CLEAR);
+    update_screen(UPD_CLEAR);
     setcursor();
     cursor_on();
     out_flush_cursor(TRUE, FALSE);
@@ -257,7 +257,7 @@ getConnInfo(char *file, char **host, char **port, char **auth)
     {
 	nbdebug(("Wrong access mode for NetBeans connection info file: \"%s\"\n",
 								       file));
-	semsg(_("E668: Wrong access mode for NetBeans connection info file: \"%s\""),
+	semsg(_(e_wrong_access_mode_for_netbeans_connection_info_file_str),
 									file);
 	return FAIL;
     }
@@ -267,7 +267,7 @@ getConnInfo(char *file, char **host, char **port, char **auth)
     if (fp == NULL)
     {
 	nbdebug(("Cannot open NetBeans connection info file\n"));
-	PERROR("E660: Cannot open NetBeans connection info file");
+	PERROR(e_cannot_open_netbeans_connection_info_file);
 	return FAIL;
     }
 
@@ -477,7 +477,7 @@ nb_parse_cmd(char_u *cmd)
     if (*verb != ':')
     {
 	nbdebug(("    missing colon: %s\n", cmd));
-	semsg("E627: missing colon: %s", cmd);
+	semsg(_(e_missing_colon_str), cmd);
 	return;
     }
     ++verb; // skip colon
@@ -501,7 +501,7 @@ nb_parse_cmd(char_u *cmd)
     if (isfunc < 0)
     {
 	nbdebug(("    missing ! or / in: %s\n", cmd));
-	semsg("E628: missing ! or / in: %s", cmd);
+	semsg(_(e_missing_bang_or_slash_in_str), cmd);
 	return;
     }
 
@@ -518,7 +518,7 @@ nb_parse_cmd(char_u *cmd)
 	 * so I'm disabling it except for debugging.
 	 */
 	nbdebug(("nb_parse_cmd: Command error for \"%s\"\n", cmd));
-	emsg("E629: bad return from nb_do_cmd");
+	emsg(e_bad_return_from_nb_do_cmd);
 #endif
     }
 }
@@ -572,7 +572,7 @@ nb_free(void)
 	buf = buf_list[i];
 	vim_free(buf.displayname);
 	vim_free(buf.signmap);
-	if (buf.bufp != NULL)
+	if (buf.bufp != NULL && buf_valid(buf.bufp))
 	{
 	    buf.bufp->b_netbeans_file = FALSE;
 	    buf.bufp->b_was_netbeans_file = FALSE;
@@ -674,11 +674,19 @@ nb_get_buf(int bufno)
     {
 	if (bufno >= buf_list_size) // grow list
 	{
-	    nbbuf_T *t_buf_list = buf_list;
+	    nbbuf_T	*t_buf_list = buf_list;
+	    size_t	bufsize;
 
 	    incr = bufno - buf_list_size + 90;
 	    buf_list_size += incr;
-	    buf_list = vim_realloc(buf_list, buf_list_size * sizeof(nbbuf_T));
+	    bufsize = buf_list_size * sizeof(nbbuf_T);
+	    if (bufsize == 0 || bufsize / sizeof(nbbuf_T)
+						      != (size_t)buf_list_size)
+	    {
+		// list size overflow, bail out
+		return NULL;
+	    }
+	    buf_list = vim_realloc(buf_list, bufsize);
 	    if (buf_list == NULL)
 	    {
 		vim_free(t_buf_list);
@@ -924,19 +932,19 @@ nb_partialremove(linenr_T lnum, colnr_T first, colnr_T last)
     int lastbyte = last;
 
     oldtext = ml_get(lnum);
-    oldlen = (int)STRLEN(oldtext);
+    oldlen = ml_get_len(lnum);
     if (first >= (colnr_T)oldlen || oldlen == 0)  // just in case
 	return;
     if (lastbyte >= oldlen)
 	lastbyte = oldlen - 1;
     newtext = alloc(oldlen - (int)(lastbyte - first));
-    if (newtext != NULL)
-    {
-	mch_memmove(newtext, oldtext, first);
-	STRMOVE(newtext + first, oldtext + lastbyte + 1);
-	nbdebug(("    NEW LINE %ld: %s\n", lnum, newtext));
-	ml_replace(lnum, newtext, FALSE);
-    }
+    if (newtext == NULL)
+	return;
+
+    mch_memmove(newtext, oldtext, first);
+    STRMOVE(newtext + first, oldtext + lastbyte + 1);
+    nbdebug(("    NEW LINE %ld: %s\n", lnum, newtext));
+    ml_replace(lnum, newtext, FALSE);
 }
 
 /*
@@ -949,15 +957,15 @@ nb_joinlines(linenr_T first, linenr_T other)
     int len_first, len_other;
     char_u *p;
 
-    len_first = (int)STRLEN(ml_get(first));
-    len_other = (int)STRLEN(ml_get(other));
+    len_first = ml_get_len(first);
+    len_other = ml_get_len(other);
     p = alloc(len_first + len_other + 1);
-    if (p != NULL)
-    {
-      mch_memmove(p, ml_get(first), len_first);
-      mch_memmove(p + len_first, ml_get(other), len_other + 1);
-      ml_replace(first, p, FALSE);
-    }
+    if (p == NULL)
+	return;
+
+    mch_memmove(p, ml_get(first), len_first);
+    mch_memmove(p + len_first, ml_get(other), len_other + 1);
+    ml_replace(first, p, FALSE);
 }
 
 #define SKIP_STOP 2
@@ -1032,7 +1040,7 @@ nb_do_cmd(
 	    if (buf == NULL || buf->bufp == NULL)
 	    {
 		nbdebug(("    Invalid buffer identifier in getAnno\n"));
-		emsg("E652: Invalid buffer identifier in getAnno");
+		emsg(_(e_invalid_buffer_identifier_in_getanno));
 		retval = FAIL;
 	    }
 	    else
@@ -1055,7 +1063,7 @@ nb_do_cmd(
 	    if (buf == NULL || buf->bufp == NULL)
 	    {
 		nbdebug(("    invalid buffer identifier in getLength\n"));
-		emsg("E632: invalid buffer identifier in getLength");
+		emsg(_(e_invalid_buffer_identifier_in_getlength));
 		retval = FAIL;
 	    }
 	    else
@@ -1077,7 +1085,7 @@ nb_do_cmd(
 	    if (buf == NULL || buf->bufp == NULL)
 	    {
 		nbdebug(("    invalid buffer identifier in getText\n"));
-		emsg("E633: invalid buffer identifier in getText");
+		emsg(_(e_invalid_buffer_identifier_in_gettext));
 		retval = FAIL;
 	    }
 	    else
@@ -1140,7 +1148,7 @@ nb_do_cmd(
 	    if (buf == NULL || buf->bufp == NULL)
 	    {
 		nbdebug(("    invalid buffer identifier in remove\n"));
-		emsg("E634: invalid buffer identifier in remove");
+		emsg(_(e_invalid_buffer_identifier_in_remove));
 		retval = FAIL;
 	    }
 	    else
@@ -1277,8 +1285,7 @@ nb_do_cmd(
 		netbeansFireChanges = oldFire;
 		netbeansSuppressNoLines = oldSuppress;
 
-		u_blockfree(buf->bufp);
-		u_clearall(buf->bufp);
+		u_clearallandblockfree(buf->bufp);
 	    }
 	    nb_reply_nil(cmdno);
 // =====================================================================
@@ -1310,7 +1317,7 @@ nb_do_cmd(
 	    if (buf == NULL || buf->bufp == NULL)
 	    {
 		nbdebug(("    invalid buffer identifier in insert\n"));
-		emsg("E635: invalid buffer identifier in insert");
+		emsg(_(e_invalid_buffer_identifier_in_insert));
 		retval = FAIL;
 	    }
 	    else if (args != NULL)
@@ -1395,7 +1402,7 @@ nb_do_cmd(
 			int	col = pos == NULL ? 0 : pos->col;
 
 			// Insert halfway a line.
-			newline = alloc(STRLEN(oldline) + len + 1);
+			newline = alloc(ml_get_len(lnum) + len + 1);
 			if (newline != NULL)
 			{
 			    mch_memmove(newline, oldline, (size_t)col);
@@ -1448,8 +1455,7 @@ nb_do_cmd(
 		netbeansFireChanges = oldFire;
 
 		// Undo info is invalid now...
-		u_blockfree(curbuf);
-		u_clearall(curbuf);
+		u_clearallandblockfree(curbuf);
 	    }
 	    vim_free(to_free);
 	    nb_reply_nil(cmdno); // or !error
@@ -1470,7 +1476,7 @@ nb_do_cmd(
 	    if (buf == NULL)
 	    {
 		nbdebug(("    invalid buffer identifier in create\n"));
-		emsg("E636: invalid buffer identifier in create");
+		emsg(_(e_invalid_buffer_identifier_in_create));
 		return FAIL;
 	    }
 	    VIM_CLEAR(buf->displayname);
@@ -1518,7 +1524,7 @@ nb_do_cmd(
 	    if (buf == NULL)
 	    {
 		nbdebug(("    invalid buffer identifier in startDocumentListen\n"));
-		emsg("E637: invalid buffer identifier in startDocumentListen");
+		emsg(_(e_invalid_buffer_identifier_in_startdocumentlisten));
 		return FAIL;
 	    }
 	    buf->fireChanges = 1;
@@ -1529,7 +1535,7 @@ nb_do_cmd(
 	    if (buf == NULL)
 	    {
 		nbdebug(("    invalid buffer identifier in stopDocumentListen\n"));
-		emsg("E638: invalid buffer identifier in stopDocumentListen");
+		emsg(_(e_invalid_buffer_identifier_in_stopdocumentlisten));
 		return FAIL;
 	    }
 	    buf->fireChanges = 0;
@@ -1537,8 +1543,9 @@ nb_do_cmd(
 	    {
 		if (!buf->bufp->b_netbeans_file)
 		{
-		    nbdebug(("E658: NetBeans connection lost for buffer %d\n", buf->bufp->b_fnum));
-		    semsg(_("E658: NetBeans connection lost for buffer %d"),
+		    nbdebug((e_netbeans_connection_lost_for_buffer_nr,
+							   buf->bufp->b_fnum));
+		    semsg(_(e_netbeans_connection_lost_for_buffer_nr),
 							   buf->bufp->b_fnum);
 		}
 		else
@@ -1558,7 +1565,7 @@ nb_do_cmd(
 	    if (buf == NULL)
 	    {
 		nbdebug(("    invalid buffer identifier in setTitle\n"));
-		emsg("E639: invalid buffer identifier in setTitle");
+		emsg(_(e_invalid_buffer_identifier_in_settitle));
 		return FAIL;
 	    }
 	    vim_free(buf->displayname);
@@ -1570,7 +1577,7 @@ nb_do_cmd(
 	    if (buf == NULL || buf->bufp == NULL)
 	    {
 		nbdebug(("    invalid buffer identifier in initDone\n"));
-		emsg("E640: invalid buffer identifier in initDone");
+		emsg(_(e_invalid_buffer_identifier_in_initdone));
 		return FAIL;
 	    }
 	    do_update = 1;
@@ -1591,7 +1598,7 @@ nb_do_cmd(
 	    if (buf == NULL)
 	    {
 		nbdebug(("    invalid buffer identifier in setBufferNumber\n"));
-		emsg("E641: invalid buffer identifier in setBufferNumber");
+		emsg(_(e_invalid_buffer_identifier_in_setbuffernumber));
 		return FAIL;
 	    }
 	    path = (char_u *)nb_unquote(args, NULL);
@@ -1602,7 +1609,7 @@ nb_do_cmd(
 	    if (bufp == NULL)
 	    {
 		nbdebug(("    File %s not found in setBufferNumber\n", args));
-		semsg("E642: File %s not found in setBufferNumber", args);
+		semsg(_(e_file_str_not_found_in_setbuffernumber), args);
 		return FAIL;
 	    }
 	    buf->bufp = bufp;
@@ -1627,7 +1634,7 @@ nb_do_cmd(
 	    if (buf == NULL)
 	    {
 		nbdebug(("    invalid buffer identifier in setFullName\n"));
-		emsg("E643: invalid buffer identifier in setFullName");
+		emsg(_(e_invalid_buffer_identifier_in_setfullname));
 		return FAIL;
 	    }
 	    vim_free(buf->displayname);
@@ -1650,7 +1657,7 @@ nb_do_cmd(
 	    if (buf == NULL)
 	    {
 		nbdebug(("    invalid buffer identifier in editFile\n"));
-		emsg("E644: invalid buffer identifier in editFile");
+		emsg(_(e_invalid_buffer_identifier_in_editfile));
 		return FAIL;
 	    }
 	    // Edit a file: like create + setFullName + read the file.
@@ -1661,9 +1668,7 @@ nb_do_cmd(
 	    buf->bufp = curbuf;
 	    buf->initDone = TRUE;
 	    do_update = 1;
-#if defined(FEAT_TITLE)
 	    maketitle();
-#endif
 #if defined(FEAT_MENU) && defined(FEAT_GUI)
 	    if (gui.in_use)
 		gui_update_menus(0);
@@ -1678,14 +1683,16 @@ nb_do_cmd(
 		// This message was commented out, probably because it can
 		// happen when shutting down.
 		if (p_verbose > 0)
-		    emsg("E645: invalid buffer identifier in setVisible");
+		    emsg(_(e_invalid_buffer_identifier_in_setvisible));
 		return FAIL;
 	    }
 	    if (streq((char *)args, "T") && buf->bufp != curbuf)
 	    {
 		exarg_T exarg;
+		CLEAR_FIELD(exarg);
 		exarg.cmd = (char_u *)"goto";
 		exarg.forceit = FALSE;
+		exarg.cmdidx = CMD_USER;
 		dosetvisible = TRUE;
 		goto_buffer(&exarg, DOBUF_FIRST, FORWARD, buf->bufp->b_fnum);
 		do_update = 1;
@@ -1718,7 +1725,7 @@ nb_do_cmd(
 		// This message was commented out, probably because it can
 		// happen when shutting down.
 		if (p_verbose > 0)
-		    emsg("E646: invalid buffer identifier in setModified");
+		    emsg(_(e_invalid_buffer_identifier_in_setmodified));
 		return FAIL;
 	    }
 	    prev_b_changed = buf->bufp->b_changed;
@@ -1740,9 +1747,7 @@ nb_do_cmd(
 	    {
 		check_status(buf->bufp);
 		redraw_tabline = TRUE;
-#ifdef FEAT_TITLE
 		maketitle();
-#endif
 		update_screen(0);
 	    }
 // =====================================================================
@@ -1752,7 +1757,10 @@ nb_do_cmd(
 	    if (buf == NULL || buf->bufp == NULL)
 		nbdebug(("    invalid buffer identifier in setModtime\n"));
 	    else
+	    {
 		buf->bufp->b_mtime = atoi((char *)args);
+		buf->bufp->b_mtime_ns = 0;
+	    }
 // =====================================================================
 	}
 	else if (streq((char *)cmd, "setReadOnly"))
@@ -1800,7 +1808,7 @@ nb_do_cmd(
 	    if (buf == NULL || buf->bufp == NULL)
 	    {
 		nbdebug(("    invalid buffer identifier in setDot\n"));
-		emsg("E647: invalid buffer identifier in setDot");
+		emsg(_(e_invalid_buffer_identifier_in_setdot));
 		return FAIL;
 	    }
 
@@ -1827,15 +1835,15 @@ nb_do_cmd(
 	    }
 
 	    // gui_update_cursor(TRUE, FALSE);
-	    // update_curbuf(NOT_VALID);
+	    // update_curbuf(UPD_NOT_VALID);
 	    update_topline();		// scroll to show the line
-	    update_screen(VALID);
+	    update_screen(UPD_VALID);
 	    setcursor();
 	    cursor_on();
 	    out_flush_cursor(TRUE, FALSE);
 
 	    // Quit a hit-return or more prompt.
-	    if (State == HITRETURN || State == ASKMORE)
+	    if (State == MODE_HITRETURN || State == MODE_ASKMORE)
 	    {
 #ifdef FEAT_GUI_GTK
 		if (gui.in_use && gtk_main_level() > 0)
@@ -1853,7 +1861,7 @@ nb_do_cmd(
 	    if (buf == NULL)
 	    {
 		nbdebug(("    invalid buffer identifier in close\n"));
-		emsg("E648: invalid buffer identifier in close");
+		emsg(_(e_invalid_buffer_identifier_in_close));
 		return FAIL;
 	    }
 
@@ -1867,7 +1875,7 @@ nb_do_cmd(
 		// This message was commented out, probably because it can
 		// happen when shutting down.
 		if (p_verbose > 0)
-		    emsg("E649: invalid buffer identifier in close");
+		    emsg(_(e_invalid_buffer_identifier_in_close));
 	    }
 	    nbdebug(("    CLOSE %d: %s\n", bufno, name));
 #ifdef FEAT_GUI
@@ -1906,7 +1914,7 @@ nb_do_cmd(
 	    if (buf == NULL)
 	    {
 		nbdebug(("    invalid buffer identifier in defineAnnoType\n"));
-		emsg("E650: invalid buffer identifier in defineAnnoType");
+		emsg(_(e_invalid_buffer_identifier_in_defineannotype));
 		return FAIL;
 	    }
 
@@ -1934,16 +1942,14 @@ nb_do_cmd(
 	    bg = vim_strsave(p);
 	    if (STRLEN(fg) > MAX_COLOR_LENGTH || STRLEN(bg) > MAX_COLOR_LENGTH)
 	    {
-		emsg("E532: highlighting color name too long in defineAnnoType");
-		vim_free(typeName);
+		emsg(_(e_highlighting_color_name_too_long_in_defineAnnoType));
+		VIM_CLEAR(typeName);
 		parse_error = TRUE;
 	    }
 	    else if (typeName != NULL && tooltip != NULL && glyphFile != NULL)
 		addsigntype(buf, typeNum, typeName, tooltip, glyphFile, fg, bg);
-	    else
-		vim_free(typeName);
 
-	    // don't free typeName; it's used directly in addsigntype()
+	    vim_free(typeName);
 	    vim_free(fg);
 	    vim_free(bg);
 	    vim_free(tooltip);
@@ -1965,7 +1971,7 @@ nb_do_cmd(
 	    if (buf == NULL || buf->bufp == NULL)
 	    {
 		nbdebug(("    invalid buffer identifier in addAnno\n"));
-		emsg("E651: invalid buffer identifier in addAnno");
+		emsg(_(e_invalid_buffer_identifier_in_addanno));
 		return FAIL;
 	    }
 
@@ -2021,7 +2027,7 @@ nb_do_cmd(
 	    args = (char_u *)cp;
 	    coloncmd(":sign unplace %d buffer=%d",
 		     serNum, buf->bufp->b_fnum);
-	    redraw_buf_later(buf->bufp, NOT_VALID);
+	    redraw_buf_later(buf->bufp, UPD_NOT_VALID);
 #endif
 // =====================================================================
 	}
@@ -2107,7 +2113,7 @@ nb_do_cmd(
 			}
 		    }
 #endif
-		    redraw_buf_later(buf->bufp, NOT_VALID);
+		    redraw_buf_later(buf->bufp, UPD_NOT_VALID);
 		}
 	    }
 // =====================================================================
@@ -2146,10 +2152,7 @@ nb_do_cmd(
 		if (p_write
 			&& !buf->bufp->b_p_ro
 			&& buf->bufp->b_ffname != NULL
-#ifdef FEAT_QUICKFIX
-			&& !bt_dontwrite(buf->bufp)
-#endif
-			)
+			&& !bt_dontwrite(buf->bufp))
 		{
 		    bufref_T bufref;
 
@@ -2217,13 +2220,13 @@ nb_do_cmd(
      */
     if (buf != NULL && buf->initDone && do_update)
     {
-	update_screen(NOT_VALID);
+	update_screen(UPD_NOT_VALID);
 	setcursor();
 	cursor_on();
 	out_flush_cursor(TRUE, FALSE);
 
 	// Quit a hit-return or more prompt.
-	if (State == HITRETURN || State == ASKMORE)
+	if (State == MODE_HITRETURN || State == MODE_ASKMORE)
 	{
 #ifdef FEAT_GUI_GTK
 	    if (gui.in_use && gtk_main_level() > 0)
@@ -2244,13 +2247,14 @@ nb_do_cmd(
     static void
 nb_set_curbuf(buf_T *buf)
 {
-    if (curbuf != buf) {
-	if (buf_jump_open_win(buf) != NULL)
-	    return;
-	if ((swb_flags & SWB_USETAB) && buf_jump_open_tab(buf) != NULL)
-	    return;
-	set_curbuf(buf, DOBUF_GOTO);
-    }
+    if (curbuf == buf)
+	return;
+
+    if (buf_jump_open_win(buf) != NULL)
+	return;
+    if ((swb_flags & SWB_USETAB) && buf_jump_open_tab(buf) != NULL)
+	return;
+    set_curbuf(buf, DOBUF_GOTO);
 }
 
 /*
@@ -2317,7 +2321,7 @@ special_keys(char_u *args)
 	    strcpy(&keybuf[i], tok);
 	    vim_snprintf(cmdbuf, sizeof(cmdbuf),
 				 "<silent><%s> :nbkey %s<CR>", keybuf, keybuf);
-	    do_map(0, (char_u *)cmdbuf, NORMAL, FALSE);
+	    do_map(MAPTYPE_MAP, (char_u *)cmdbuf, MODE_NORMAL, FALSE);
 	}
 	tok = strtok(NULL, " ");
     }
@@ -2345,7 +2349,7 @@ ex_nbstart(
 		&& !defined(FEAT_GUI_MSWIN)
     if (gui.in_use)
     {
-	emsg(_("E838: netbeans is not supported with this GUI"));
+	emsg(_(e_netbeans_is_not_supported_with_this_GUI));
 	return;
     }
 # endif
@@ -2361,14 +2365,14 @@ nb_init_graphics(void)
 {
     static int did_init = FALSE;
 
-    if (!did_init)
-    {
-	coloncmd(":highlight NBGuarded guibg=Cyan guifg=Black"
-			    " ctermbg=LightCyan ctermfg=Black");
-	coloncmd(":sign define %d linehl=NBGuarded", GUARDED);
+    if (did_init)
+	return;
 
-	did_init = TRUE;
-    }
+    coloncmd(":highlight NBGuarded guibg=Cyan guifg=Black"
+	    " ctermbg=LightCyan ctermfg=Black");
+    coloncmd(":sign define %d linehl=NBGuarded", GUARDED);
+
+    did_init = TRUE;
 }
 
 /*
@@ -2465,29 +2469,29 @@ netbeans_beval_cb(
     if (!can_use_beval() || !NETBEANS_OPEN)
 	return;
 
-    if (get_beval_info(beval, TRUE, &wp, &lnum, &text, &col) == OK)
+    if (get_beval_info(beval, TRUE, &wp, &lnum, &text, &col) != OK)
+	return;
+
+    // Send debugger request.  Only when the text is of reasonable
+    // length.
+    if (text != NULL && text[0] != NUL && STRLEN(text) < MAXPATHL)
     {
-	// Send debugger request.  Only when the text is of reasonable
-	// length.
-	if (text != NULL && text[0] != NUL && STRLEN(text) < MAXPATHL)
+	buf = alloc(MAXPATHL * 2 + 25);
+	if (buf != NULL)
 	{
-	    buf = alloc(MAXPATHL * 2 + 25);
-	    if (buf != NULL)
+	    p = nb_quote(text);
+	    if (p != NULL)
 	    {
-		p = nb_quote(text);
-		if (p != NULL)
-		{
-		    vim_snprintf(buf, MAXPATHL * 2 + 25,
-				     "0:balloonText=%d \"%s\"\n", r_cmdno, p);
-		    vim_free(p);
-		}
-		nbdebug(("EVT: %s", buf));
-		nb_send(buf, "netbeans_beval_cb");
-		vim_free(buf);
+		vim_snprintf(buf, MAXPATHL * 2 + 25,
+			"0:balloonText=%d \"%s\"\n", r_cmdno, p);
+		vim_free(p);
 	    }
+	    nbdebug(("EVT: %s", buf));
+	    nb_send(buf, "netbeans_beval_cb");
+	    vim_free(buf);
 	}
-	vim_free(text);
     }
+    vim_free(text);
 }
 #endif
 
@@ -2510,7 +2514,7 @@ netbeans_open(char *params, int doabort)
 
     if (NETBEANS_OPEN)
     {
-	emsg(_("E511: netbeans already connected"));
+	emsg(_(e_netbeans_already_connected));
 	return;
     }
 
@@ -2522,7 +2526,7 @@ netbeans_open(char *params, int doabort)
 
     // update the screen after having added the gutter
     changed_window_setting();
-    update_screen(CLEAR);
+    update_screen(UPD_CLEAR);
     setcursor();
     cursor_on();
     out_flush_cursor(TRUE, FALSE);
@@ -2552,12 +2556,12 @@ set_ref_in_nb_channel(int copyID)
     int abort = FALSE;
     typval_T tv;
 
-    if (nb_channel != NULL)
-    {
-	tv.v_type = VAR_CHANNEL;
-	tv.vval.v_channel = nb_channel;
-	abort = set_ref_in_item(&tv, copyID, NULL, NULL);
-    }
+    if (nb_channel == NULL)
+	return FALSE;
+
+    tv.v_type = VAR_CHANNEL;
+    tv.vval.v_channel = nb_channel;
+    abort = set_ref_in_item(&tv, copyID, NULL, NULL);
     return abort;
 }
 #endif
@@ -2647,7 +2651,10 @@ netbeans_file_opened(buf_T *bufp)
 
     nb_send(buffer, "netbeans_file_opened");
     if (p_acd && vim_chdirfile(bufp->b_ffname, "auto") == OK)
+    {
+	last_chdir_reason = "netbeans";
 	shorten_fnames(TRUE);
+    }
 }
 
 /*
@@ -2732,13 +2739,15 @@ netbeans_inserted(
     if (nbbuf->insertDone)
 	nbbuf->modified = 1;
 
+    // send the "insert" EVT
+    newtxt = alloc(newlen + 1);
+    vim_strncpy(newtxt, txt, newlen);
+
+    // Note: this may make "txt" invalid
     pos.lnum = linenr;
     pos.col = col;
     off = pos2off(bufp, &pos);
 
-    // send the "insert" EVT
-    newtxt = alloc(newlen + 1);
-    vim_strncpy(newtxt, txt, newlen);
     p = nb_quote(newtxt);
     if (p != NULL)
     {
@@ -2819,22 +2828,22 @@ netbeans_button_release(int button)
 
     bufno = nb_getbufno(curbuf);
 
-    if (bufno >= 0 && curwin != NULL && curwin->w_buffer == curbuf)
-    {
-	int col = mouse_col - curwin->w_wincol
-			      - ((curwin->w_p_nu || curwin->w_p_rnu) ? 9 : 1);
-	long off = pos2off(curbuf, &curwin->w_cursor);
+    if (bufno < 0 || curwin == NULL || curwin->w_buffer != curbuf)
+	return;
 
-	// sync the cursor position
-	sprintf(buf, "%d:newDotAndMark=%d %ld %ld\n", bufno, r_cmdno, off, off);
-	nbdebug(("EVT: %s", buf));
-	nb_send(buf, "netbeans_button_release[newDotAndMark]");
+    int col = mouse_col - curwin->w_wincol
+	- ((curwin->w_p_nu || curwin->w_p_rnu) ? 9 : 1);
+    long off = pos2off(curbuf, &curwin->w_cursor);
 
-	sprintf(buf, "%d:buttonRelease=%d %d %ld %d\n", bufno, r_cmdno,
-				    button, (long)curwin->w_cursor.lnum, col);
-	nbdebug(("EVT: %s", buf));
-	nb_send(buf, "netbeans_button_release");
-    }
+    // sync the cursor position
+    sprintf(buf, "%d:newDotAndMark=%d %ld %ld\n", bufno, r_cmdno, off, off);
+    nbdebug(("EVT: %s", buf));
+    nb_send(buf, "netbeans_button_release[newDotAndMark]");
+
+    sprintf(buf, "%d:buttonRelease=%d %d %ld %d\n", bufno, r_cmdno,
+	    button, (long)curwin->w_cursor.lnum, col);
+    nbdebug(("EVT: %s", buf));
+    nb_send(buf, "netbeans_button_release");
 }
 
 
@@ -3232,7 +3241,7 @@ addsigntype(
 	    }
 	}
 
-	globalsignmap[i] = (char *)typeName;
+	globalsignmap[i] = (char *)vim_strsave(typeName);
 	globalsignmapused = i + 1;
     }
 
@@ -3300,29 +3309,26 @@ get_buf_size(buf_T *bufp)
 
     if (bufp->b_ml.ml_flags & ML_EMPTY)
 	return 0;
+
+    if (get_fileformat(bufp) == EOL_DOS)
+	eol_size = 2;
     else
+	eol_size = 1;
+    for (lnum = 1; lnum <= bufp->b_ml.ml_line_count; ++lnum)
     {
-	if (get_fileformat(bufp) == EOL_DOS)
-	    eol_size = 2;
-	else
-	    eol_size = 1;
-	for (lnum = 1; lnum <= bufp->b_ml.ml_line_count; ++lnum)
+	char_count += ml_get_buf_len(bufp, lnum) + eol_size;
+	// Check for a CTRL-C every 100000 characters
+	if (char_count > last_check)
 	{
-	    char_count += (long)STRLEN(ml_get_buf(bufp, lnum, FALSE))
-								   + eol_size;
-	    // Check for a CTRL-C every 100000 characters
-	    if (char_count > last_check)
-	    {
-		ui_breakcheck();
-		if (got_int)
-		    return char_count;
-		last_check = char_count + 100000L;
-	    }
+	    ui_breakcheck();
+	    if (got_int)
+		return char_count;
+	    last_check = char_count + 100000L;
 	}
-	// Correction for when last line doesn't have an EOL.
-	if (!bufp->b_p_eol && (bufp->b_p_bin || !bufp->b_p_fixeol))
-	    char_count -= eol_size;
     }
+    // Correction for when last line doesn't have an EOL.
+    if (!bufp->b_p_eol && (bufp->b_p_bin || !bufp->b_p_fixeol))
+	char_count -= eol_size;
 
     return char_count;
 }
@@ -3385,12 +3391,12 @@ pos2off(buf_T *buf, pos_T *pos)
 {
     long	 offset = 0;
 
-    if (!(buf->b_ml.ml_flags & ML_EMPTY))
-    {
-	if ((offset = ml_find_line_or_offset(buf, pos->lnum, 0)) < 0)
-	    return 0;
-	offset += pos->col;
-    }
+    if (buf->b_ml.ml_flags & ML_EMPTY)
+	return 0;
+
+    if ((offset = ml_find_line_or_offset(buf, pos->lnum, 0)) < 0)
+	return 0;
+    offset += pos->col;
 
     return offset;
 }
@@ -3473,7 +3479,7 @@ print_save_msg(nbbuf_T *buf, off_T nchars)
 	char msgbuf[IOSIZE];
 
 	vim_snprintf(msgbuf, IOSIZE,
-		       _("E505: %s is read-only (add ! to override)"), IObuff);
+		       _(e_is_read_only_add_bang_to_override), IObuff);
 	nbdebug(("    %s\n", msgbuf));
 	emsg(msgbuf);
     }

@@ -1,5 +1,7 @@
 " Test binding arguments to a Funcref.
  
+source check.vim
+
 func MyFunc(arg1, arg2, arg3)
   return a:arg1 . '/' . a:arg2 . '/' . a:arg3
 endfunc
@@ -86,7 +88,7 @@ func Test_partial_dict()
   call assert_equal("Hello", dict.tr())
 
   call assert_fails("let F=function('setloclist', 10)", "E923:")
-  call assert_fails("let F=function('setloclist', [], [])", "E922:")
+  call assert_fails("let F=function('setloclist', [], [])", "E1206:")
 endfunc
 
 func Test_partial_implicit()
@@ -235,17 +237,16 @@ func Test_redefine_dict_func()
 endfunc
 
 func Test_bind_in_python()
-  if has('python')
-    let g:d = {}
-    function g:d.test2()
-    endfunction
-    python import vim
-    try
-      call assert_equal(pyeval('vim.bindeval("g:d.test2")'), g:d.test2)
-    catch
-      call assert_true(v:false, v:exception)
-    endtry
-  endif
+  CheckFeature python
+  let g:d = {}
+  function g:d.test2()
+  endfunction
+  python import vim
+  try
+    call assert_equal(pyeval('vim.bindeval("g:d.test2")'), g:d.test2)
+  catch
+    call assert_true(v:false, v:exception)
+  endtry
 endfunc
 
 " This caused double free on exit if EXITFREE is defined.
@@ -270,23 +271,21 @@ func Ignored3(job1, job2, status)
 endfunc
 
 func Test_cycle_partial_job()
-  if has('job')
-    let job = job_start('echo')
-    call job_setoptions(job, {'exit_cb': function('Ignored3', [job])})
-    unlet job
-  endif
+  CheckFeature job
+  let job = job_start('echo')
+  call job_setoptions(job, {'exit_cb': function('Ignored3', [job])})
+  unlet job
 endfunc
 
 func Ignored2(job, status)
 endfunc
 
 func Test_ref_job_partial_dict()
-  if has('job')
-    let g:ref_job = job_start('echo')
-    let d = {'a': 'b'}
-    call job_setoptions(g:ref_job, {'exit_cb': function('Ignored2', [], d)})
-    call test_garbagecollect_now()
-  endif
+  CheckFeature job
+  let g:ref_job = job_start('echo')
+  let d = {'a': 'b'}
+  call job_setoptions(g:ref_job, {'exit_cb': function('Ignored2', [], d)})
+  call test_garbagecollect_now()
 endfunc
 
 func Test_auto_partial_rebind()
@@ -312,6 +311,11 @@ func Test_auto_partial_rebind()
 endfunc
 
 func Test_get_partial_items()
+  func s:Qux(x, y, z=3, w=1, ...)
+  endfunc
+  func s:Qux1(x, y)
+  endfunc
+
   let dict = {'name': 'hello'}
   let args = ["foo", "bar"]
   let Func = function('MyDictFunc')
@@ -332,6 +336,23 @@ func Test_get_partial_items()
   let dict = {'partial has': 'no dict'}
   call assert_equal(dict, get(P, 'dict', dict))
   call assert_equal(0, get(l:P, 'dict'))
+
+  call assert_equal({'required': 2, 'optional': 2, 'varargs': v:true},
+      \ get(funcref('s:Qux', []), 'arity'))
+  call assert_equal({'required': 1, 'optional': 2, 'varargs': v:true},
+      \ get(funcref('s:Qux', [1]), 'arity'))
+  call assert_equal({'required': 0, 'optional': 2, 'varargs': v:true},
+      \ get(funcref('s:Qux', [1, 2]), 'arity'))
+  call assert_equal({'required': 0, 'optional': 1, 'varargs': v:true},
+      \ get(funcref('s:Qux', [1, 2, 3]), 'arity'))
+  call assert_equal({'required': 0, 'optional': 0, 'varargs': v:true},
+      \ get(funcref('s:Qux', [1, 2, 3, 4]), 'arity'))
+  " More args than expected is not an error
+  call assert_equal({'required': 0, 'optional': 0, 'varargs': v:false},
+      \ get(funcref('s:Qux1', [1, 2, 3, 4]), 'arity'))
+
+  delfunc s:Qux
+  delfunc s:Qux1
 endfunc
 
 func Test_compare_partials()
@@ -405,6 +426,20 @@ func Test_compare_partials()
   " compare a partial and a null partial
   call assert_false(N1 == F1)
   call assert_false(F1 is N1)
+endfunc
+
+func Test_partial_method()
+  func Foo(x, y, z)
+    return x + y + z
+  endfunc
+  let d = {"Fn": function('Foo', [10, 20])}
+  call assert_fails('echo 30->d.Fn()', 'E1265: Cannot use a partial here')
+  delfunc Foo
+endfunc
+
+func Test_non_callable_type_as_method()
+  let d = {"Fn": 10}
+  call assert_fails('echo 30->d.Fn()', 'E1085: Not a callable type: d.Fn')
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

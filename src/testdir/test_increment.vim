@@ -284,7 +284,7 @@ endfunc
 " 1
 "     1
 "     1
-"     Expexted:
+"     Expected:
 "     1) g Ctrl-A on block selected indented lines
 "     2
 " 1
@@ -704,7 +704,7 @@ endfunc
 " Text:
 "   1 23
 "   4 56
-" 
+"
 " Expected:
 "   1) f2 Ctrl-V jl <ctrl-a>, repeat twice afterwards with .
 "   1 26
@@ -840,6 +840,60 @@ func Test_increment_unsigned()
   set nrformats-=unsigned
 endfunc
 
+" Try incrementing/decrementing a number when nrformats contains blank
+func Test_increment_blank()
+  set nrformats+=blank
+
+  " Signed
+  call setline(1, '0')
+  exec "norm! gg0\<C-X>"
+  call assert_equal('-1', getline(1))
+
+  call setline(1, '3')
+  exec "norm! gg010\<C-X>"
+  call assert_equal('-7', getline(1))
+
+  call setline(1, '-0')
+  exec "norm! gg0\<C-X>"
+  call assert_equal("-1", getline(1))
+
+  " Unsigned
+  " NOTE: 18446744073709551615 == 2^64 - 1
+  call setline(1, 'a-18446744073709551615')
+  exec "norm! gg0\<C-A>"
+  call assert_equal('a-18446744073709551615', getline(1))
+
+  call setline(1, 'a-18446744073709551615')
+  exec "norm! gg0\<C-A>"
+  call assert_equal('a-18446744073709551615', getline(1))
+
+  call setline(1, 'a-18446744073709551614')
+  exec "norm! gg08\<C-A>"
+  call assert_equal('a-18446744073709551615', getline(1))
+
+  call setline(1, 'a-1')
+  exec "norm! gg0\<C-A>"
+  call assert_equal('a-2', getline(1))
+
+  set nrformats-=blank
+endfunc
+
+func Test_in_decrement_large_number()
+  " NOTE: 18446744073709551616 == 2^64
+  call setline(1, '18446744073709551616')
+  exec "norm! gg0\<C-X>"
+  call assert_equal('18446744073709551615', getline(1))
+
+  exec "norm! gg0\<C-X>"
+  call assert_equal('18446744073709551614', getline(1))
+
+  exec "norm! gg0\<C-A>"
+  call assert_equal('18446744073709551615', getline(1))
+
+  exec "norm! gg0\<C-A>"
+  call assert_equal('-18446744073709551615', getline(1))
+endfunc
+
 func Test_normal_increment_with_virtualedit()
   set virtualedit=all
 
@@ -874,6 +928,23 @@ func Test_normal_increment_with_virtualedit()
   call assert_equal([0, 1, 3, 29], getpos('.'))
 
   set virtualedit&
+endfunc
+
+" Test for incrementing a signed hexadecimal and octal number
+func Test_normal_increment_signed_hexoct_nr()
+  new
+  " negative sign before a hex number should be ignored
+  call setline(1, ["-0x9"])
+  exe "norm \<C-A>"
+  call assert_equal(["-0xa"], getline(1, '$'))
+  exe "norm \<C-X>"
+  call assert_equal(["-0x9"], getline(1, '$'))
+  call setline(1, ["-007"])
+  exe "norm \<C-A>"
+  call assert_equal(["-010"], getline(1, '$'))
+  exe "norm \<C-X>"
+  call assert_equal(["-007"], getline(1, '$'))
+  bw!
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

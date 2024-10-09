@@ -36,14 +36,11 @@ INCFILES=$(TBLFILES:.tbl=.inc)
 
 HFILES_INT=$(sort $(wildcard src/*.h)) $(HFILES)
 
-VERSION_MAJOR=0
-VERSION_MINOR=1
-
 VERSION_CURRENT=0
 VERSION_REVISION=0
 VERSION_AGE=0
 
-VERSION=$(VERSION_MAJOR).$(VERSION_MINOR)
+VERSION=0.3.3
 
 PREFIX=/usr/local
 BINDIR=$(PREFIX)/bin
@@ -78,7 +75,7 @@ t/harness.lo: t/harness.c $(HFILES)
 	$(LIBTOOL) --mode=compile --tag=CC $(CC) $(CFLAGS) -o $@ -c $<
 
 t/harness: t/harness.lo $(LIBRARY)
-	$(LIBTOOL) --mode=link --tag=CC $(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	$(LIBTOOL) --mode=link --tag=CC $(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -static
 
 .PHONY: test
 test: $(LIBRARY) t/harness
@@ -97,7 +94,7 @@ install-inc:
 	install -d $(DESTDIR)$(INCDIR)
 	install -m644 $(HFILES) $(DESTDIR)$(INCDIR)
 	install -d $(DESTDIR)$(LIBDIR)/pkgconfig
-	sed -e "s,@PREFIX@,$(PREFIX)," -e "s,@LIBDIR@,$(LIBDIR)," -e "s,@VERSION@,$(VERSION)," <vterm.pc.in >$(DESTDIR)$(LIBDIR)/pkgconfig/vterm.pc
+	sed -e "s,@INCDIR@,$(INCDIR)," -e "s,@LIBDIR@,$(LIBDIR)," -e "s,@VERSION@,$(VERSION)," <vterm.pc.in >$(DESTDIR)$(LIBDIR)/pkgconfig/vterm.pc
 
 install-lib: $(LIBRARY)
 	install -d $(DESTDIR)$(LIBDIR)

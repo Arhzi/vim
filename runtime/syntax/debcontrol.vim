@@ -3,8 +3,8 @@
 " Maintainer:  Debian Vim Maintainers
 " Former Maintainers: Gerfried Fuchs <alfie@ist.org>
 "                     Wichert Akkerman <wakkerma@debian.org>
-" Last Change: 2018 Aug 11
-" URL: https://salsa.debian.org/vim-team/vim-debian/blob/master/syntax/debcontrol.vim
+" Last Change: 2024 Mar 26
+" URL: https://salsa.debian.org/vim-team/vim-debian/blob/main/syntax/debcontrol.vim
 
 " Standard syntax initialization
 if exists('b:current_syntax')
@@ -17,19 +17,19 @@ set cpo&vim
 " Should match case except for the keys of each field
 syn case match
 
-syn iskeyword @,48-57,-,/
+syn iskeyword @,48-57,-
 
 " Everything that is not explicitly matched by the rules below
 syn match debcontrolElse "^.*$"
 
-" Common seperators
+" Common separators
 syn match debControlComma ",[ \t]*"
 syn match debControlSpace "[ \t]"
 
 let s:kernels = ['linux', 'hurd', 'kfreebsd', 'knetbsd', 'kopensolaris', 'netbsd']
 let s:archs = [
       \ 'alpha', 'amd64', 'armeb', 'armel', 'armhf', 'arm64', 'avr32', 'hppa'
-      \, 'i386', 'ia64', 'lpia', 'm32r', 'm68k', 'mipsel', 'mips64el', 'mips'
+      \, 'i386', 'ia64', 'loong64', 'lpia', 'm32r', 'm68k', 'mipsel', 'mips64el', 'mips'
       \, 'powerpcspe', 'powerpc', 'ppc64el', 'ppc64', 'riscv64', 's390x', 's390', 'sh3eb'
       \, 'sh3', 'sh4eb', 'sh4', 'sh', 'sparc64', 'sparc', 'x32'
       \ ]
@@ -47,22 +47,24 @@ exe 'syn keyword debcontrolArchitecture contained '. join(s:pairs)
 
 unlet s:kernels s:archs s:pairs
 
+" Keep in sync with https://metadata.ftp-master.org/sections.822
+" curl -q https://metadata.ftp-master.debian.org/sections.822 2>/dev/null| grep-dctrl -n --not -FSection -sSection  / -
 let s:sections = [
       \ 'admin', 'cli-mono', 'comm', 'database', 'debian-installer', 'debug'
       \, 'devel', 'doc', 'editors', 'education', 'electronics', 'embedded'
-      \, 'fonts', 'games', 'gnome', 'gnustep', 'gnu-r', 'golang', 'graphics'
+      \, 'fonts', 'games', 'gnome', 'gnu-r', 'gnustep', 'golang', 'graphics'
       \, 'hamradio', 'haskell', 'httpd', 'interpreters', 'introspection'
-      \, 'java\%(script\)\=', 'kde', 'kernel', 'libs', 'libdevel', 'lisp'
-      \, 'localization', 'mail', 'math', 'metapackages', 'misc', 'net'
-      \, 'news', 'ocaml', 'oldlibs', 'otherosfs', 'perl', 'php', 'python'
-      \, 'ruby', 'rust', 'science', 'shells', 'sound', 'text', 'tex'
+      \, 'java', 'javascript', 'kde', 'kernel', 'libdevel', 'libs', 'lisp'
+      \, 'localization', 'mail', 'math', 'metapackages', 'misc', 'net', 'news'
+      \, 'ocaml', 'oldlibs', 'otherosfs', 'perl', 'php', 'python', 'raku'
+      \, 'ruby', 'rust', 'science', 'shells', 'sound', 'tasks', 'tex', 'text'
       \, 'utils', 'vcs', 'video', 'web', 'x11', 'xfce', 'zope'
       \ ]
 
 syn keyword debcontrolMultiArch contained no foreign allowed same
 syn match debcontrolName contained "[a-z0-9][a-z0-9+.-]\+"
 syn keyword debcontrolPriority contained extra important optional required standard
-exe 'syn match debcontrolSection contained "\%(\%(contrib\|non-free\|non-US/main\|non-US/contrib\|non-US/non-free\|restricted\|universe\|multiverse\)/\)\=\%('.join(s:sections, '\|').'\)"'
+exe 'syn match debcontrolSection contained "\%(\%(contrib\|non-free\|non-US/main\|non-US/contrib\|non-US/non-free\|restricted\|universe\|multiverse\)/\)\=\<\%('.join(s:sections, '\|').'\)\>"'
 syn keyword debcontrolPackageType contained udeb deb
 syn match debcontrolVariable contained "\${.\{-}}"
 syn keyword debcontrolDmUpload contained yes
@@ -89,6 +91,11 @@ syn case ignore
 
 " Handle all fields from deb-src-control(5)
 
+" Catch-all for the legal fields
+syn region debcontrolField matchgroup=debcontrolKey start="^\%(\%(XSBC-Original-\)\=Maintainer\|Standards-Version\|Bugs\|Origin\|X[SB]-Python-Version\|\%(XS-\)\=Vcs-Mtn\|\%(XS-\)\=Testsuite\%(-Triggers\)\=\|Build-Profiles\|Tag\|Subarchitecture\|Kernel-Version\|Installer-Menu-Item\): " end="$" contains=debcontrolVariable,debcontrolEmail oneline
+syn region debcontrolMultiField matchgroup=debcontrolKey start="^\%(Build-\%(Conflicts\|Depends\)\%(-Arch\|-Indep\)\=\|\%(Pre-\)\=Depends\|Recommends\|Suggests\|Breaks\|Enhances\|Replaces\|Conflicts\|Provides\|Built-Using\|Static-Built-Using\|Uploaders\|X[SBC]\{0,3\}\%(Private-\)\=-[-a-zA-Z0-9]\+\): *" skip="^[ \t]" end="^$"me=s-1 end="^[^ \t#]"me=s-1 contains=debcontrolEmail,debcontrolVariable,debcontrolComment
+syn region debcontrolMultiFieldSpell matchgroup=debcontrolKey start="^Description: *" skip="^[ \t]" end="^$"me=s-1 end="^[^ \t#]"me=s-1 contains=debcontrolEmail,debcontrolVariable,debcontrolComment,@Spell
+
 " Fields for which we do strict syntax checking
 syn region debcontrolStrictField matchgroup=debcontrolKey start="^Architecture: *" end="$" contains=debcontrolArchitecture,debcontrolSpace oneline
 syn region debcontrolStrictField matchgroup=debcontrolKey start="^Multi-Arch: *" end="$" contains=debcontrolMultiArch oneline
@@ -97,19 +104,14 @@ syn region debcontrolStrictField matchgroup=debcontrolKey start="^Priority: *" e
 syn region debcontrolStrictField matchgroup=debcontrolKey start="^Section: *" end="$" contains=debcontrolSection oneline
 syn region debcontrolStrictField matchgroup=debcontrolKey start="^\%(XC-\)\=Package-Type: *" end="$" contains=debcontrolPackageType oneline
 syn region debcontrolStrictField matchgroup=debcontrolKey start="^Homepage: *" end="$" contains=debcontrolHTTPUrl oneline keepend
-syn region debcontrolStrictField matchgroup=debcontrolKey start="^\%(XS-\)\=Vcs-\%(Browser\|Arch\|Bzr\|Darcs\|Hg\): *" end="$" contains=debcontrolHTTPUrl oneline keepend
-syn region debcontrolStrictField matchgroup=debcontrolKey start="^\%(XS-\)\=Vcs-Svn: *" end="$" contains=debcontrolVcsSvn,debcontrolHTTPUrl oneline keepend
-syn region debcontrolStrictField matchgroup=debcontrolKey start="^\%(XS-\)\=Vcs-Cvs: *" end="$" contains=debcontrolVcsCvs oneline keepend
-syn region debcontrolStrictField matchgroup=debcontrolKey start="^\%(XS-\)\=Vcs-Git: *" end="$" contains=debcontrolVcsGit oneline keepend
+syn region debcontrolStrictField matchgroup=debcontrolKey start="^\%(XS-[-a-zA-Z0-9]\+-\)\=Vcs-\%(Browser\|Arch\|Bzr\|Darcs\|Hg\): *" end="$" contains=debcontrolHTTPUrl oneline keepend
+syn region debcontrolStrictField matchgroup=debcontrolKey start="^\%(XS-[-a-zA-Z0-9]\+-\)\=Vcs-Svn: *" end="$" contains=debcontrolVcsSvn,debcontrolHTTPUrl oneline keepend
+syn region debcontrolStrictField matchgroup=debcontrolKey start="^\%(XS-[-a-zA-Z0-9]\+-\)\=Vcs-Cvs: *" end="$" contains=debcontrolVcsCvs oneline keepend
+syn region debcontrolStrictField matchgroup=debcontrolKey start="^\%(XS-[-a-zA-Z0-9]\+-\)\=Vcs-Git: *" end="$" contains=debcontrolVcsGit oneline keepend
 syn region debcontrolStrictField matchgroup=debcontrolKey start="^Rules-Requires-Root: *" end="$" contains=debcontrolR3 oneline
 syn region debcontrolStrictField matchgroup=debcontrolKey start="^\%(Build-\)\=Essential: *" end="$" contains=debcontrolYesNo oneline
 
 syn region debcontrolStrictField matchgroup=debcontrolDeprecatedKey start="^\%(XS-\)\=DM-Upload-Allowed: *" end="$" contains=debcontrolDmUpload oneline
-
-" Catch-all for the other legal fields
-syn region debcontrolField matchgroup=debcontrolKey start="^\%(\%(XSBC-Original-\)\=Maintainer\|Standards-Version\|Bugs\|Origin\|X[SB]-Python-Version\|\%(XS-\)\=Vcs-Mtn\|\%(XS-\)\=Testsuite\%(-Triggers\)\=\|Build-Profiles\|Tag\|Subarchitecture\|Kernel-Version\|Installer-Menu-Item\): " end="$" contains=debcontrolVariable,debcontrolEmail oneline
-syn region debcontrolMultiField matchgroup=debcontrolKey start="^\%(Build-\%(Conflicts\|Depends\)\%(-Arch\|-Indep\)\=\|\%(Pre-\)\=Depends\|Recommends\|Suggests\|Breaks\|Enhances\|Replaces\|Conflicts\|Provides\|Built-Using\|Uploaders\|X[SBC]\{0,3\}\%(Private-\)\=-[-a-zA-Z0-9]\+\): *" skip="^[ \t]" end="^$"me=s-1 end="^[^ \t#]"me=s-1 contains=debcontrolEmail,debcontrolVariable,debcontrolComment
-syn region debcontrolMultiFieldSpell matchgroup=debcontrolKey start="^Description: *" skip="^[ \t]" end="^$"me=s-1 end="^[^ \t#]"me=s-1 contains=debcontrolEmail,debcontrolVariable,debcontrolComment,@Spell
 
 " Associate our matches and regions with pretty colours
 hi def link debcontrolKey           Keyword

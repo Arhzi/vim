@@ -23,6 +23,7 @@ Most code can be found in a file with an obvious name (incomplete list):
 
 File name       | Description
 --------------- | -----------
+alloc.c		| memory management
 arglist.c	| handling argument list
 autocmd.c	| autocommands
 blob.c		| blob data type
@@ -48,11 +49,16 @@ filepath.c	| dealing with file names and paths
 findfile.c	| search for files in 'path'
 fold.c		| folding
 getchar.c	| getting characters and key mapping
+gc.c	    | garbage collection
+help.c		| vim help related functions
 highlight.c	| syntax highlighting
 indent.c	| text indentation
 insexpand.c	| Insert mode completion
-mark.c		| marks
+locale.c	| locale/language handling
 map.c		| mapping and abbreviations
+mark.c		| marks
+match.c		| highlight matching
+float.c		| floating point functions
 mbyte.c		| multi-byte character handling
 memfile.c	| storing lines for buffers in a swapfile
 memline.c	| storing lines for buffers in memory
@@ -76,6 +82,7 @@ sign.c		| signs
 spell.c		| spell checking core
 spellfile.c	| spell file handling
 spellsuggest.c	| spell correction suggestions
+strings.c	| string manipulation functions
 syntax.c	| syntax and other highlighting
 tag.c		| tags
 term.c		| terminal handling, termcap codes
@@ -226,4 +233,4 @@ If you would like to help making Vim better, see the
 file.
 
 
-This is `README.md` for version 8.2 of the Vim source code.
+This is `README.md` for version 9.1 of the Vim source code.

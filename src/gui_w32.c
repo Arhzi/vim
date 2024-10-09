@@ -29,6 +29,12 @@
 # include "gui_dwrite.h"
 #endif
 
+// values for "dead_key"
+#define DEAD_KEY_OFF			0	// no dead key
+#define DEAD_KEY_SET_DEFAULT		1	// dead key pressed
+#define DEAD_KEY_TRANSIENT_IN_ON_CHAR	2	// wait for next key press
+#define DEAD_KEY_SKIP_ON_CHAR		3	// skip next _OnChar()
+
 #if defined(FEAT_DIRECTX)
 static DWriteContext *s_dwc = NULL;
 static int s_directx_enabled = 0;
@@ -40,7 +46,89 @@ static void directx_binddc(void);
 
 #ifdef FEAT_MENU
 static int gui_mswin_get_menu_height(int fix_window);
+#else
+# define gui_mswin_get_menu_height(fix_window)	0
 #endif
+
+typedef struct keycode_trans_strategy {
+    void (*ptr_on_char) (HWND /*hwnd UNUSED*/, UINT /*cch*/, int /*cRepeat UNUSED*/);
+    void (*ptr_on_sys_char) (HWND /*hwnd UNUSED*/, UINT /*cch*/, int /*cRepeat UNUSED*/);
+    void (*ptr_process_message_usual_key) (UINT /*vk*/, const MSG* /*pmsg*/);
+    int  (*ptr_get_active_modifiers)(void);
+    int  (*is_experimental)(void);
+} keycode_trans_strategy;
+
+// forward declarations for input instance initializer
+static void _OnChar_experimental(HWND /*hwnd UNUSED*/, UINT /*cch*/, int /*cRepeat UNUSED*/);
+static void _OnSysChar_experimental(HWND /*hwnd UNUSED*/, UINT /*cch*/, int /*cRepeat UNUSED*/);
+static void process_message_usual_key_experimental(UINT /*vk*/, const MSG* /*pmsg*/);
+static int  get_active_modifiers_experimental(void);
+static int  is_experimental_true(void);
+
+keycode_trans_strategy keycode_trans_strategy_experimental = {
+      _OnChar_experimental      // ptr_on_char
+    , _OnSysChar_experimental // ptr_on_sys_char
+    , process_message_usual_key_experimental // ptr_process_message_usual_key
+    , get_active_modifiers_experimental
+    , is_experimental_true
+};
+
+// forward declarations for input instance initializer
+static void _OnChar_classic(HWND /*hwnd UNUSED*/, UINT /*cch*/, int /*cRepeat UNUSED*/);
+static void _OnSysChar_classic(HWND /*hwnd UNUSED*/, UINT /*cch*/, int /*cRepeat UNUSED*/);
+static void process_message_usual_key_classic(UINT /*vk*/, const MSG* /*pmsg*/);
+static int  get_active_modifiers_classic(void);
+static int  is_experimental_false(void);
+
+keycode_trans_strategy keycode_trans_strategy_classic = {
+      _OnChar_classic      // ptr_on_char
+    , _OnSysChar_classic // ptr_on_sys_char
+    , process_message_usual_key_classic // ptr_process_message_usual_key
+    , get_active_modifiers_classic
+    , is_experimental_false
+};
+
+keycode_trans_strategy *keycode_trans_strategy_used = NULL;
+
+static int is_experimental_true(void)
+{
+    return 1;
+}
+
+static int is_experimental_false(void)
+{
+    return 0;
+}
+
+/*
+ * Initialize the keycode translation strategy.
+ */
+static void keycode_trans_strategy_init(void)
+{
+    const char *strategy = NULL;
+
+    // set default value as fallback
+    keycode_trans_strategy_used = &keycode_trans_strategy_classic;
+
+    strategy = getenv("VIM_KEYCODE_TRANS_STRATEGY");
+    if (strategy == NULL)
+    {
+	return;
+    }
+
+    if (STRICMP(strategy, "classic") == 0)
+    {
+	keycode_trans_strategy_used = &keycode_trans_strategy_classic;
+	return;
+    }
+
+    if (STRICMP(strategy, "experimental") == 0)
+    {
+	keycode_trans_strategy_used = &keycode_trans_strategy_experimental;
+	return;
+    }
+
+}
 
 #if defined(FEAT_RENDER_OPTIONS) || defined(PROTO)
     int
@@ -186,19 +274,9 @@ gui_mch_set_rendering_options(char_u *s)
 
 // cproto fails on missing include files
 #ifndef PROTO
-
-# ifndef __MINGW32__
-#  include <shellapi.h>
-# endif
-# if defined(FEAT_TOOLBAR) || defined(FEAT_BEVAL_GUI) || defined(FEAT_GUI_TABLINE)
-#  include <commctrl.h>
-# endif
+# include <shellapi.h>
+# include <commctrl.h>
 # include <windowsx.h>
-
-# ifdef GLOBAL_IME
-#  include "glbl_ime.h"
-# endif
-
 #endif // PROTO
 
 #ifdef FEAT_MENU
@@ -208,26 +286,36 @@ gui_mch_set_rendering_options(char_u *s)
 // Some parameters for dialog boxes.  All in pixels.
 #define DLG_PADDING_X		10
 #define DLG_PADDING_Y		10
-#define DLG_OLD_STYLE_PADDING_X	5
-#define DLG_OLD_STYLE_PADDING_Y	5
 #define DLG_VERT_PADDING_X	4	// For vertical buttons
 #define DLG_VERT_PADDING_Y	4
 #define DLG_ICON_WIDTH		34
 #define DLG_ICON_HEIGHT		34
 #define DLG_MIN_WIDTH		150
-#define DLG_FONT_NAME		"MS Sans Serif"
+#define DLG_FONT_NAME		"MS Shell Dlg"
 #define DLG_FONT_POINT_SIZE	8
 #define DLG_MIN_MAX_WIDTH	400
 #define DLG_MIN_MAX_HEIGHT	400
 
 #define DLG_NONBUTTON_CONTROL	5000	// First ID of non-button controls
 
-#ifndef WM_XBUTTONDOWN // For Win2K / winME ONLY
-# define WM_XBUTTONDOWN		0x020B
-# define WM_XBUTTONUP		0x020C
-# define WM_XBUTTONDBLCLK	0x020D
-# define MK_XBUTTON1		0x0020
-# define MK_XBUTTON2		0x0040
+#ifndef WM_DPICHANGED
+# define WM_DPICHANGED			0x02E0
+#endif
+
+#ifndef WM_GETDPISCALEDSIZE
+# define WM_GETDPISCALEDSIZE		0x02E4
+#endif
+
+#ifndef WM_MOUSEHWHEEL
+# define WM_MOUSEHWHEEL			0x020E
+#endif
+
+#ifndef SPI_GETWHEELSCROLLCHARS
+# define SPI_GETWHEELSCROLLCHARS	0x006C
+#endif
+
+#ifndef SPI_SETWHEELSCROLLCHARS
+# define SPI_SETWHEELSCROLLCHARS	0x006D
 #endif
 
 #ifdef PROTO
@@ -240,6 +328,7 @@ gui_mch_set_rendering_options(char_u *s)
 # define CONST
 # define FAR
 # define NEAR
+# define WINAPI
 # undef _cdecl
 # define _cdecl
 typedef int BOOL;
@@ -267,9 +356,11 @@ typedef int HRESULT;
 # undef MSG
 typedef int MSG;
 typedef int NEWTEXTMETRIC;
+typedef int NMHDR;
 typedef int OSVERSIONINFO;
 typedef int PWORD;
 typedef int RECT;
+typedef int SIZE;
 typedef int UINT;
 typedef int WORD;
 typedef int WPARAM;
@@ -287,11 +378,7 @@ typedef int COLORREF;
 typedef int HCURSOR;
 #endif
 
-#ifndef GET_X_LPARAM
-# define GET_X_LPARAM(lp) ((int)(short)LOWORD(lp))
-#endif
-
-static void _OnPaint( HWND hwnd);
+static void _OnPaint(HWND hwnd);
 static void fill_rect(const RECT *rcp, HBRUSH hbr, COLORREF color);
 static void clear_rect(RECT *rcp);
 
@@ -313,16 +400,13 @@ static int		s_busy_processing = FALSE;
 static int		destroying = FALSE;	// call DestroyWindow() ourselves
 
 #ifdef MSWIN_FIND_REPLACE
-static UINT		s_findrep_msg = 0;	// set in gui_w[16/32].c
+static UINT		s_findrep_msg = 0;
 static FINDREPLACEW	s_findrep_struct;
 static HWND		s_findrep_hwnd = NULL;
 static int		s_findrep_is_find;	// TRUE for find dialog, FALSE
 						// for find/replace dialog
 #endif
 
-#if !defined(FEAT_GUI)
-static
-#endif
 HWND			s_hwnd = NULL;
 static HDC		s_hdc = NULL;
 static HBRUSH		s_brush = NULL;
@@ -354,11 +438,53 @@ static int		s_need_activate = FALSE;
 // problems (e.g., while ":s" is working).
 static int allow_scrollbar = FALSE;
 
-#ifdef GLOBAL_IME
-# define MyTranslateMessage(x) global_ime_TranslateMessage(x)
-#else
-# define MyTranslateMessage(x) TranslateMessage(x)
+#ifndef _DPI_AWARENESS_CONTEXTS_
+typedef HANDLE DPI_AWARENESS_CONTEXT;
+
+typedef enum DPI_AWARENESS {
+    DPI_AWARENESS_INVALID	    = -1,
+    DPI_AWARENESS_UNAWARE	    = 0,
+    DPI_AWARENESS_SYSTEM_AWARE	    = 1,
+    DPI_AWARENESS_PER_MONITOR_AWARE = 2
+} DPI_AWARENESS;
+
+# define DPI_AWARENESS_CONTEXT_UNAWARE		    ((DPI_AWARENESS_CONTEXT)-1)
+# define DPI_AWARENESS_CONTEXT_SYSTEM_AWARE	    ((DPI_AWARENESS_CONTEXT)-2)
+# define DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE    ((DPI_AWARENESS_CONTEXT)-3)
+# define DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 ((DPI_AWARENESS_CONTEXT)-4)
+# define DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED    ((DPI_AWARENESS_CONTEXT)-5)
 #endif
+
+#define DEFAULT_DPI	96
+static int		s_dpi = DEFAULT_DPI;
+static BOOL		s_in_dpichanged = FALSE;
+static DPI_AWARENESS	s_process_dpi_aware = DPI_AWARENESS_INVALID;
+static RECT		s_suggested_rect;
+
+static UINT (WINAPI *pGetDpiForSystem)(void) = NULL;
+static UINT (WINAPI *pGetDpiForWindow)(HWND hwnd) = NULL;
+static int (WINAPI *pGetSystemMetricsForDpi)(int, UINT) = NULL;
+//static INT (WINAPI *pGetWindowDpiAwarenessContext)(HWND hwnd) = NULL;
+static DPI_AWARENESS_CONTEXT (WINAPI *pSetThreadDpiAwarenessContext)(DPI_AWARENESS_CONTEXT dpiContext) = NULL;
+static DPI_AWARENESS (WINAPI *pGetAwarenessFromDpiAwarenessContext)(DPI_AWARENESS_CONTEXT) = NULL;
+
+    static int WINAPI
+stubGetSystemMetricsForDpi(int nIndex, UINT dpi UNUSED)
+{
+    return GetSystemMetrics(nIndex);
+}
+
+    static int
+adjust_fontsize_by_dpi(int size)
+{
+    return size * s_dpi / (int)pGetDpiForSystem();
+}
+
+    static int
+adjust_by_system_dpi(int size)
+{
+    return size * (int)pGetDpiForSystem() / DEFAULT_DPI;
+}
 
 #if defined(FEAT_DIRECTX)
     static int
@@ -379,17 +505,14 @@ directx_enabled(void)
     static void
 directx_binddc(void)
 {
-    if (s_textArea != NULL)
-    {
-	RECT	rect;
-	GetClientRect(s_textArea, &rect);
-	DWriteContext_BindDC(s_dwc, s_hdc, &rect);
-    }
+    if (s_textArea == NULL)
+	return;
+
+    RECT	rect;
+    GetClientRect(s_textArea, &rect);
+    DWriteContext_BindDC(s_dwc, s_hdc, &rect);
 }
 #endif
-
-// use of WindowProc depends on Global IME
-#define MyWindowProc vim_WindowProc
 
 extern int current_font_height;	    // this is in os_mswin.c
 
@@ -483,16 +606,16 @@ static int	s_getting_focus = FALSE;
 static int	s_x_pending;
 static int	s_y_pending;
 static UINT	s_kFlags_pending;
-static UINT	s_wait_timer = 0;	  // Timer for get char from user
+static UINT_PTR	s_wait_timer = 0;	  // Timer for get char from user
 static int	s_timed_out = FALSE;
-static int	dead_key = 0;		  // 0: no dead key, 1: dead key pressed
+static int	dead_key = DEAD_KEY_OFF;
 static UINT	surrogate_pending_ch = 0; // 0: no surrogate pending,
 					  // else a high surrogate
 
 #ifdef FEAT_BEVAL_GUI
 // balloon-eval WM_NOTIFY_HANDLER
 static void Handle_WM_Notify(HWND hwnd, LPNMHDR pnmh);
-static void TrackUserActivity(UINT uMsg);
+static void track_user_activity(UINT uMsg);
 #endif
 
 /*
@@ -500,11 +623,9 @@ static void TrackUserActivity(UINT uMsg);
  *
  * These LOGFONTW used for IME.
  */
-#if defined(FEAT_MBYTE_IME) || defined(GLOBAL_IME)
+#ifdef FEAT_MBYTE_IME
 // holds LOGFONTW for 'guifontwide' if available, otherwise 'guifont'
 static LOGFONTW norm_logfont;
-#endif
-#ifdef FEAT_MBYTE_IME
 // holds LOGFONTW for 'guifont' always.
 static LOGFONTW sub_logfont;
 #endif
@@ -552,7 +673,7 @@ static int		blink_state = BLINK_NONE;
 static long_u		blink_waittime = 700;
 static long_u		blink_ontime = 400;
 static long_u		blink_offtime = 250;
-static UINT		blink_timer = 0;
+static UINT_PTR		blink_timer = 0;
 
     int
 gui_mch_is_blinking(void)
@@ -578,7 +699,7 @@ gui_mch_set_blinking(long wait, long on, long off)
 _OnBlinkTimer(
     HWND hwnd,
     UINT uMsg UNUSED,
-    UINT idEvent,
+    UINT_PTR idEvent,
     DWORD dwTime UNUSED)
 {
     MSG msg;
@@ -590,22 +711,20 @@ _OnBlinkTimer(
     KillTimer(NULL, idEvent);
 
     // Eat spurious WM_TIMER messages
-    while (pPeekMessage(&msg, hwnd, WM_TIMER, WM_TIMER, PM_REMOVE))
+    while (PeekMessageW(&msg, hwnd, WM_TIMER, WM_TIMER, PM_REMOVE))
 	;
 
     if (blink_state == BLINK_ON)
     {
 	gui_undraw_cursor();
 	blink_state = BLINK_OFF;
-	blink_timer = (UINT) SetTimer(NULL, 0, (UINT)blink_offtime,
-						    (TIMERPROC)_OnBlinkTimer);
+	blink_timer = SetTimer(NULL, 0, (UINT)blink_offtime, _OnBlinkTimer);
     }
     else
     {
 	gui_update_cursor(TRUE, FALSE);
 	blink_state = BLINK_ON;
-	blink_timer = (UINT) SetTimer(NULL, 0, (UINT)blink_ontime,
-						    (TIMERPROC)_OnBlinkTimer);
+	blink_timer = SetTimer(NULL, 0, (UINT)blink_ontime, _OnBlinkTimer);
     }
     gui_mch_flush();
 }
@@ -615,14 +734,14 @@ gui_mswin_rm_blink_timer(void)
 {
     MSG msg;
 
-    if (blink_timer != 0)
-    {
-	KillTimer(NULL, blink_timer);
-	// Eat spurious WM_TIMER messages
-	while (pPeekMessage(&msg, s_hwnd, WM_TIMER, WM_TIMER, PM_REMOVE))
-	    ;
-	blink_timer = 0;
-    }
+    if (blink_timer == 0)
+	return;
+
+    KillTimer(NULL, blink_timer);
+    // Eat spurious WM_TIMER messages
+    while (PeekMessageW(&msg, s_hwnd, WM_TIMER, WM_TIMER, PM_REMOVE))
+	;
+    blink_timer = 0;
 }
 
 /*
@@ -652,8 +771,7 @@ gui_mch_start_blink(void)
     // Only switch blinking on if none of the times is zero
     if (blink_waittime && blink_ontime && blink_offtime && gui.in_focus)
     {
-	blink_timer = (UINT)SetTimer(NULL, 0, (UINT)blink_waittime,
-						    (TIMERPROC)_OnBlinkTimer);
+	blink_timer = SetTimer(NULL, 0, (UINT)blink_waittime, _OnBlinkTimer);
 	blink_state = BLINK_ON;
 	gui_update_cursor(TRUE, FALSE);
 	gui_mch_flush();
@@ -668,7 +786,7 @@ gui_mch_start_blink(void)
 _OnTimer(
     HWND hwnd,
     UINT uMsg UNUSED,
-    UINT idEvent,
+    UINT_PTR idEvent,
     DWORD dwTime UNUSED)
 {
     MSG msg;
@@ -680,7 +798,7 @@ _OnTimer(
     s_timed_out = TRUE;
 
     // Eat spurious WM_TIMER messages
-    while (pPeekMessage(&msg, hwnd, WM_TIMER, WM_TIMER, PM_REMOVE))
+    while (PeekMessageW(&msg, hwnd, WM_TIMER, WM_TIMER, PM_REMOVE))
 	;
     if (idEvent == s_wait_timer)
 	s_wait_timer = 0;
@@ -692,7 +810,7 @@ _OnDeadChar(
     UINT ch UNUSED,
     int cRepeat UNUSED)
 {
-    dead_key = 1;
+    dead_key = DEAD_KEY_SET_DEFAULT;
 }
 
 /*
@@ -790,10 +908,158 @@ char_to_string(int ch, char_u *string, int slen, int had_alt)
 }
 
 /*
+ * Experimental implementation, introduced in v8.2.4807
+ * "processing key event in Win32 GUI is not ideal"
+ *
+ * TODO: since introduction, this experimental function started
+ * to be used as well outside of original key press/processing
+ * area, and usages not via "get_active_modifiers_via_ptr" should
+ * be watched.
+ */
+    static int
+get_active_modifiers_experimental(void)
+{
+    int modifiers = 0;
+
+    if (GetKeyState(VK_CONTROL) & 0x8000)
+	modifiers |= MOD_MASK_CTRL;
+    if (GetKeyState(VK_SHIFT) & 0x8000)
+	modifiers |= MOD_MASK_SHIFT;
+    // Windows handles Ctrl + Alt as AltGr and vice-versa. We can distinguish
+    // the two cases by checking whether the left or the right Alt key is
+    // pressed.
+    if (GetKeyState(VK_LMENU) & 0x8000)
+	modifiers |= MOD_MASK_ALT;
+    if ((modifiers & MOD_MASK_CTRL) && (GetKeyState(VK_RMENU) & 0x8000))
+	modifiers &= ~MOD_MASK_CTRL;
+    // Add RightALT only if it is hold alone (without Ctrl), because if AltGr
+    // is pressed, Windows claims that Ctrl is hold as well. That way we can
+    // recognize Right-ALT alone and be sure that not AltGr is hold.
+    if (!(GetKeyState(VK_CONTROL) & 0x8000)
+	    &&  (GetKeyState(VK_RMENU) & 0x8000)
+	    && !(GetKeyState(VK_LMENU) & 0x8000)) // seems AltGr has both set
+	modifiers |= MOD_MASK_ALT;
+
+    return modifiers;
+}
+
+/*
+ * "Classic" implementation, existing prior to v8.2.4807
+ */
+    static int
+get_active_modifiers_classic(void)
+{
+    int modifiers = 0;
+
+    if (GetKeyState(VK_SHIFT) & 0x8000)
+	modifiers |= MOD_MASK_SHIFT;
+    /*
+     * Don't use caps-lock as shift, because these are special keys
+     * being considered here, and we only want letters to get
+     * shifted -- webb
+     */
+    /*
+    if (GetKeyState(VK_CAPITAL) & 0x0001)
+	modifiers ^= MOD_MASK_SHIFT;
+    */
+    if (GetKeyState(VK_CONTROL) & 0x8000)
+	modifiers |= MOD_MASK_CTRL;
+    if (GetKeyState(VK_MENU) & 0x8000)
+	modifiers |= MOD_MASK_ALT;
+
+    return modifiers;
+}
+
+    static int
+get_active_modifiers(void)
+{
+    return get_active_modifiers_experimental();
+}
+
+    static int
+get_active_modifiers_via_ptr(void)
+{
+    // marshal to corresponding implementation
+    return keycode_trans_strategy_used->ptr_get_active_modifiers();
+}
+
+/*
  * Key hit, add it to the input buffer.
  */
     static void
 _OnChar(
+    HWND hwnd UNUSED,
+    UINT cch,
+    int cRepeat UNUSED)
+{
+    // marshal to corresponding implementation
+    keycode_trans_strategy_used->ptr_on_char(hwnd, cch, cRepeat);
+}
+
+/*
+ * Experimental implementation, introduced in v8.2.4807
+ * "processing key event in Win32 GUI is not ideal"
+ */
+    static void
+_OnChar_experimental(
+    HWND hwnd UNUSED,
+    UINT cch,
+    int cRepeat UNUSED)
+{
+    char_u	string[40];
+    int		len = 0;
+    int		modifiers;
+    int		ch = cch;   // special keys are negative
+
+    if (dead_key == DEAD_KEY_SKIP_ON_CHAR)
+	return;
+
+    //  keep DEAD_KEY_TRANSIENT_IN_ON_CHAR value for later handling in
+    //  process_message()
+    if (dead_key != DEAD_KEY_TRANSIENT_IN_ON_CHAR)
+	dead_key = DEAD_KEY_OFF;
+
+    modifiers = get_active_modifiers_experimental();
+
+    ch = simplify_key(ch, &modifiers);
+
+    // Some keys need adjustment when the Ctrl modifier is used.
+    ++no_reduce_keys;
+    ch = may_adjust_key_for_ctrl(modifiers, ch);
+    --no_reduce_keys;
+
+    // remove the SHIFT modifier for keys where it's already included, e.g.,
+    // '(' and '*'
+    modifiers = may_remove_shift_modifier(modifiers, ch);
+
+    // Unify modifiers somewhat.  No longer use ALT to set the 8th bit.
+    ch = extract_modifiers(ch, &modifiers, FALSE, NULL);
+    if (ch == CSI)
+	ch = K_CSI;
+
+    if (modifiers)
+    {
+	string[0] = CSI;
+	string[1] = KS_MODIFIER;
+	string[2] = modifiers;
+	add_to_input_buf(string, 3);
+    }
+
+    len = char_to_string(ch, string, 40, FALSE);
+    if (len == 1 && string[0] == Ctrl_C && ctrl_c_interrupts)
+    {
+	trash_input_buf();
+	got_int = TRUE;
+    }
+
+    add_to_input_buf(string, len);
+}
+
+/*
+ * "Classic" implementation, existing prior to v8.2.4807
+ */
+    static void
+_OnChar_classic(
     HWND hwnd UNUSED,
     UINT ch,
     int cRepeat UNUSED)
@@ -822,6 +1088,75 @@ _OnSysChar(
     UINT cch,
     int cRepeat UNUSED)
 {
+    // marshal to corresponding implementation
+    keycode_trans_strategy_used->ptr_on_sys_char(hwnd, cch, cRepeat);
+}
+
+/*
+ * Experimental implementation, introduced in v8.2.4807
+ * "processing key event in Win32 GUI is not ideal"
+ */
+    static void
+_OnSysChar_experimental(
+    HWND hwnd UNUSED,
+    UINT cch,
+    int cRepeat UNUSED)
+{
+    char_u	string[40]; // Enough for multibyte character
+    int		len;
+    int		modifiers;
+    int		ch = cch;   // special keys are negative
+
+    dead_key = DEAD_KEY_OFF;
+
+    // OK, we have a character key (given by ch) which was entered with the
+    // ALT key pressed. Eg, if the user presses Alt-A, then ch == 'A'. Note
+    // that the system distinguishes Alt-a and Alt-A (Alt-Shift-a unless
+    // CAPSLOCK is pressed) at this point.
+    modifiers = get_active_modifiers_experimental();
+    ch = simplify_key(ch, &modifiers);
+    // remove the SHIFT modifier for keys where it's already included, e.g.,
+    // '(' and '*'
+    modifiers = may_remove_shift_modifier(modifiers, ch);
+
+    // Unify modifiers somewhat.  No longer use ALT to set the 8th bit.
+    ch = extract_modifiers(ch, &modifiers, FALSE, NULL);
+    if (ch == CSI)
+	ch = K_CSI;
+
+    len = 0;
+    if (modifiers)
+    {
+	string[len++] = CSI;
+	string[len++] = KS_MODIFIER;
+	string[len++] = modifiers;
+    }
+
+    if (IS_SPECIAL((int)ch))
+    {
+	string[len++] = CSI;
+	string[len++] = K_SECOND((int)ch);
+	string[len++] = K_THIRD((int)ch);
+    }
+    else
+    {
+	// Although the documentation isn't clear about it, we assume "ch" is
+	// a Unicode character.
+	len += char_to_string(ch, string + len, 40 - len, TRUE);
+    }
+
+    add_to_input_buf(string, len);
+}
+
+/*
+ * "Classic" implementation, existing prior to v8.2.4807
+ */
+    static void
+_OnSysChar_classic(
+    HWND hwnd UNUSED,
+    UINT cch,
+    int cRepeat UNUSED)
+{
     char_u	string[40]; // Enough for multibyte character
     int		len;
     int		modifiers;
@@ -844,8 +1179,7 @@ _OnSysChar(
     ch = simplify_key(ch, &modifiers);
     // remove the SHIFT modifier for keys where it's already included, e.g.,
     // '(' and '*'
-    if (ch < 0x100 && !isalpha(ch) && isprint(ch))
-	modifiers &= ~MOD_MASK_SHIFT;
+    modifiers = may_remove_shift_modifier(modifiers, ch);
 
     // Unify modifiers somewhat.  No longer use ALT to set the 8th bit.
     ch = extract_modifiers(ch, &modifiers, FALSE, NULL);
@@ -892,7 +1226,7 @@ _OnMouseEvent(
 	vim_modifiers |= MOUSE_SHIFT;
     if (keyFlags & MK_CONTROL)
 	vim_modifiers |= MOUSE_CTRL;
-    if (GetKeyState(VK_MENU) & 0x8000)
+    if (GetKeyState(VK_LMENU) & 0x8000)
 	vim_modifiers |= MOUSE_ALT;
 
     gui_send_mouse_event(button, x, y, repeated_click, vim_modifiers);
@@ -923,9 +1257,6 @@ _OnMouseButtonDown(
 	button = MOUSE_RIGHT;
     else if (s_uMsg == WM_XBUTTONDOWN || s_uMsg == WM_XBUTTONDBLCLK)
     {
-#ifndef GET_XBUTTON_WPARAM
-# define GET_XBUTTON_WPARAM(wParam)	(HIWORD(wParam))
-#endif
 	button = ((GET_XBUTTON_WPARAM(s_wParam) == 1) ? MOUSE_X1 : MOUSE_X2);
     }
     else if (s_uMsg == WM_CAPTURECHANGED)
@@ -937,63 +1268,64 @@ _OnMouseButtonDown(
 	else
 	    button = MOUSE_LEFT;
     }
-    if (button >= 0)
+
+    if (button < 0)
+	return;
+
+    repeated_click = ((int)(currentTime - s_prevTime) < p_mouset);
+
+    /*
+     * Holding down the left and right buttons simulates pushing the middle
+     * button.
+     */
+    if (repeated_click
+	    && ((button == MOUSE_LEFT && s_button_pending == MOUSE_RIGHT)
+		|| (button == MOUSE_RIGHT
+		    && s_button_pending == MOUSE_LEFT)))
     {
-	repeated_click = ((int)(currentTime - s_prevTime) < p_mouset);
-
 	/*
-	 * Holding down the left and right buttons simulates pushing the middle
-	 * button.
+	 * Hmm, gui.c will ignore more than one button down at a time, so
+	 * pretend we let go of it first.
 	 */
-	if (repeated_click
-		&& ((button == MOUSE_LEFT && s_button_pending == MOUSE_RIGHT)
-		    || (button == MOUSE_RIGHT
-					  && s_button_pending == MOUSE_LEFT)))
-	{
-	    /*
-	     * Hmm, gui.c will ignore more than one button down at a time, so
-	     * pretend we let go of it first.
-	     */
-	    gui_send_mouse_event(MOUSE_RELEASE, x, y, FALSE, 0x0);
-	    button = MOUSE_MIDDLE;
-	    repeated_click = FALSE;
-	    s_button_pending = -1;
-	    _OnMouseEvent(button, x, y, repeated_click, keyFlags);
-	}
-	else if ((repeated_click)
-		|| (mouse_model_popup() && (button == MOUSE_RIGHT)))
-	{
-	    if (s_button_pending > -1)
-	    {
-		    _OnMouseEvent(s_button_pending, x, y, FALSE, keyFlags);
-		    s_button_pending = -1;
-	    }
-	    // TRACE("Button down at x %d, y %d\n", x, y);
-	    _OnMouseEvent(button, x, y, repeated_click, keyFlags);
-	}
-	else
-	{
-	    /*
-	     * If this is the first press (i.e. not a multiple click) don't
-	     * action immediately, but store and wait for:
-	     * i) button-up
-	     * ii) mouse move
-	     * iii) another button press
-	     * before using it.
-	     * This enables us to make left+right simulate middle button,
-	     * without left or right being actioned first.  The side-effect is
-	     * that if you click and hold the mouse without dragging, the
-	     * cursor doesn't move until you release the button. In practice
-	     * this is hardly a problem.
-	     */
-	    s_button_pending = button;
-	    s_x_pending = x;
-	    s_y_pending = y;
-	    s_kFlags_pending = keyFlags;
-	}
-
-	s_prevTime = currentTime;
+	gui_send_mouse_event(MOUSE_RELEASE, x, y, FALSE, 0x0);
+	button = MOUSE_MIDDLE;
+	repeated_click = FALSE;
+	s_button_pending = -1;
+	_OnMouseEvent(button, x, y, repeated_click, keyFlags);
     }
+    else if ((repeated_click)
+	    || (mouse_model_popup() && (button == MOUSE_RIGHT)))
+    {
+	if (s_button_pending > -1)
+	{
+	    _OnMouseEvent(s_button_pending, x, y, FALSE, keyFlags);
+	    s_button_pending = -1;
+	}
+	// TRACE("Button down at x %d, y %d\n", x, y);
+	_OnMouseEvent(button, x, y, repeated_click, keyFlags);
+    }
+    else
+    {
+	/*
+	 * If this is the first press (i.e. not a multiple click) don't
+	 * action immediately, but store and wait for:
+	 * i) button-up
+	 * ii) mouse move
+	 * iii) another button press
+	 * before using it.
+	 * This enables us to make left+right simulate middle button,
+	 * without left or right being actioned first.  The side-effect is
+	 * that if you click and hold the mouse without dragging, the
+	 * cursor doesn't move until you release the button. In practice
+	 * this is hardly a problem.
+	 */
+	s_button_pending = button;
+	s_x_pending = x;
+	s_y_pending = y;
+	s_kFlags_pending = keyFlags;
+    }
+
+    s_prevTime = currentTime;
 }
 
     static void
@@ -1136,23 +1468,23 @@ _OnFindRepl(void)
 	flags = FRD_REPLACEALL;
     }
 
-    if (flags != 0)
-    {
-	char_u	*p, *q;
+    if (flags == 0)
+	return;
 
-	// Call the generic GUI function to do the actual work.
-	if (s_findrep_struct.Flags & FR_WHOLEWORD)
-	    flags |= FRD_WHOLE_WORD;
-	if (s_findrep_struct.Flags & FR_MATCHCASE)
-	    flags |= FRD_MATCH_CASE;
-	down = (s_findrep_struct.Flags & FR_DOWN) != 0;
-	p = utf16_to_enc(s_findrep_struct.lpstrFindWhat, NULL);
-	q = utf16_to_enc(s_findrep_struct.lpstrReplaceWith, NULL);
-	if (p != NULL && q != NULL)
-	    gui_do_findrepl(flags, p, q, down);
-	vim_free(p);
-	vim_free(q);
-    }
+    char_u	*p, *q;
+
+    // Call the generic GUI function to do the actual work.
+    if (s_findrep_struct.Flags & FR_WHOLEWORD)
+	flags |= FRD_WHOLE_WORD;
+    if (s_findrep_struct.Flags & FR_MATCHCASE)
+	flags |= FRD_MATCH_CASE;
+    down = (s_findrep_struct.Flags & FR_DOWN) != 0;
+    p = utf16_to_enc(s_findrep_struct.lpstrFindWhat, NULL);
+    q = utf16_to_enc(s_findrep_struct.lpstrReplaceWith, NULL);
+    if (p != NULL && q != NULL)
+	gui_do_findrepl(flags, p, q, down);
+    vim_free(p);
+    vim_free(q);
 }
 #endif
 
@@ -1229,7 +1561,7 @@ _TextAreaWndProc(
     s_lParam = lParam;
 
 #ifdef FEAT_BEVAL_GUI
-    TrackUserActivity(uMsg);
+    track_user_activity(uMsg);
 #endif
 
     switch (uMsg)
@@ -1255,22 +1587,8 @@ _TextAreaWndProc(
 	    return TRUE;
 #endif
 	default:
-	    return MyWindowProc(hwnd, uMsg, wParam, lParam);
+	    return DefWindowProcW(hwnd, uMsg, wParam, lParam);
     }
-}
-
-#ifdef PROTO
-typedef int WINAPI;
-#endif
-
-    LRESULT WINAPI
-vim_WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
-{
-#ifdef GLOBAL_IME
-    return global_ime_DefWindowProc(hwnd, message, wParam, lParam);
-#else
-    return DefWindowProcW(hwnd, message, wParam, lParam);
-#endif
 }
 
 /*
@@ -1355,7 +1673,7 @@ gui_mch_set_text_area_pos(int x, int y, int w, int h)
 #ifdef FEAT_TOOLBAR
     if (vim_strchr(p_go, GO_TOOLBAR) != NULL)
 	SendMessage(s_toolbarhwnd, WM_SIZE,
-	      (WPARAM)0, (LPARAM)(w + ((long)(TOOLBAR_BUTTON_HEIGHT+8)<<16)));
+	      (WPARAM)0, MAKELPARAM(w, gui.toolbar_height));
 #endif
 #if defined(FEAT_GUI_TABLINE)
     if (showing_tabline)
@@ -1365,7 +1683,7 @@ gui_mch_set_text_area_pos(int x, int y, int w, int h)
 
 # ifdef FEAT_TOOLBAR
 	if (vim_strchr(p_go, GO_TOOLBAR) != NULL)
-	    top = TOOLBAR_BUTTON_HEIGHT + TOOLBAR_BORDER_HEIGHT;
+	    top = gui.toolbar_height;
 # endif
 	GetClientRect(s_hwnd, &rect);
 	MoveWindow(s_tabhwnd, 0, top, rect.right, gui.tabline_height, TRUE);
@@ -1412,6 +1730,34 @@ gui_mch_set_scrollbar_pos(
 			      SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
 
+    int
+gui_mch_get_scrollbar_xpadding(void)
+{
+    RECT    rcTxt, rcWnd;
+    int	    xpad;
+
+    GetWindowRect(s_textArea, &rcTxt);
+    GetWindowRect(s_hwnd, &rcWnd);
+    xpad = rcWnd.right - rcTxt.right - gui.scrollbar_width
+	- pGetSystemMetricsForDpi(SM_CXFRAME, s_dpi)
+	- pGetSystemMetricsForDpi(SM_CXPADDEDBORDER, s_dpi);
+    return (xpad < 0) ? 0 : xpad;
+}
+
+    int
+gui_mch_get_scrollbar_ypadding(void)
+{
+    RECT    rcTxt, rcWnd;
+    int	    ypad;
+
+    GetWindowRect(s_textArea, &rcTxt);
+    GetWindowRect(s_hwnd, &rcWnd);
+    ypad = rcWnd.bottom - rcTxt.bottom - gui.scrollbar_height
+	- pGetSystemMetricsForDpi(SM_CYFRAME, s_dpi)
+	- pGetSystemMetricsForDpi(SM_CXPADDEDBORDER, s_dpi);
+    return (ypad < 0) ? 0 : ypad;
+}
+
     void
 gui_mch_create_scrollbar(
     scrollbar_T *sb,
@@ -1429,7 +1775,7 @@ gui_mch_create_scrollbar(
 /*
  * Find the scrollbar with the given hwnd.
  */
-	 static scrollbar_T *
+    static scrollbar_T *
 gui_mswin_find_scrollbar(HWND hwnd)
 {
     win_T	*wp;
@@ -1446,11 +1792,32 @@ gui_mswin_find_scrollbar(HWND hwnd)
     return NULL;
 }
 
+    static void
+update_scrollbar_size(void)
+{
+    gui.scrollbar_width = pGetSystemMetricsForDpi(SM_CXVSCROLL, s_dpi);
+    gui.scrollbar_height = pGetSystemMetricsForDpi(SM_CYHSCROLL, s_dpi);
+}
+
+/*
+ * Get the average character size of a font.
+ */
+    static void
+GetAverageFontSize(HDC hdc, SIZE *size)
+{
+    // GetTextMetrics() may not return the right value in tmAveCharWidth
+    // for some fonts.  Do our own average computation.
+    GetTextExtentPoint(hdc,
+	    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+	    52, size);
+    size->cx = (size->cx / 26 + 1) / 2;
+}
+
 /*
  * Get the character size of a font.
  */
     static void
-GetFontSize(GuiFont font)
+GetFontSize(GuiFont font, int *char_width, int *char_height)
 {
     HWND    hwnd = GetDesktopWindow();
     HDC	    hdc = GetWindowDC(hwnd);
@@ -1459,18 +1826,25 @@ GetFontSize(GuiFont font)
     TEXTMETRIC tm;
 
     GetTextMetrics(hdc, &tm);
-    // GetTextMetrics() may not return the right value in tmAveCharWidth
-    // for some fonts.  Do our own average computation.
-    GetTextExtentPoint(hdc,
-	    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
-	    52, &size);
-    gui.char_width = (size.cx / 26 + 1) / 2 + tm.tmOverhang;
+    GetAverageFontSize(hdc, &size);
 
-    gui.char_height = tm.tmHeight + p_linespace;
+    if (char_width)
+	*char_width = size.cx + tm.tmOverhang;
+    if (char_height)
+	*char_height = tm.tmHeight + p_linespace;
 
     SelectFont(hdc, hfntOld);
 
     ReleaseDC(hwnd, hdc);
+}
+
+/*
+ * Update the character size in "gui" structure with the specified font.
+ */
+    static void
+UpdateFontSize(GuiFont font)
+{
+    GetFontSize(font, &gui.char_width, &gui.char_height);
 }
 
 /*
@@ -1479,7 +1853,7 @@ GetFontSize(GuiFont font)
     int
 gui_mch_adjust_charheight(void)
 {
-    GetFontSize(gui.norm_font);
+    UpdateFontSize(gui.norm_font);
     return OK;
 }
 
@@ -1524,9 +1898,12 @@ gui_mch_get_font(
     GuiFont	font = NOFONT;
 
     if (get_logfont(&lf, name, NULL, giveErrorIfMissing) == OK)
+    {
+	lf.lfHeight = adjust_fontsize_by_dpi(lf.lfHeight);
 	font = get_font_handle(&lf);
+    }
     if (font == NOFONT && giveErrorIfMissing)
-	semsg(_(e_font), name);
+	semsg(_(e_unknown_font_str), name);
     return font;
 }
 
@@ -1606,7 +1983,7 @@ gui_mch_get_color(char_u *name)
     /*
      * Try to look up a system colour.
      */
-    for (i = 0; i < sizeof(sys_table) / sizeof(sys_table[0]); i++)
+    for (i = 0; i < (int)ARRAY_LENGTH(sys_table); i++)
 	if (STRICMP(name, sys_table[i].name) == 0)
 	    return GetSysColor(sys_table[i].color);
 
@@ -1628,8 +2005,8 @@ gui_mch_haskey(char_u *name)
     int i;
 
     for (i = 0; special_keys[i].vim_code1 != NUL; i++)
-	if (name[0] == special_keys[i].vim_code0 &&
-					 name[1] == special_keys[i].vim_code1)
+	if (name[0] == special_keys[i].vim_code0
+				       && name[1] == special_keys[i].vim_code1)
 	    return OK;
     return FAIL;
 }
@@ -1637,7 +2014,7 @@ gui_mch_haskey(char_u *name)
     void
 gui_mch_beep(void)
 {
-    MessageBeep(MB_OK);
+    MessageBeep((UINT)-1);
 }
 /*
  * Invert a rectangle from row r, column c, for nr rows and nc columns.
@@ -1736,27 +2113,166 @@ gui_mch_draw_part_cursor(
  * dead key's nominal character and re-post the original message.
  */
     static void
-outputDeadKey_rePost(MSG originalMsg)
+outputDeadKey_rePost_Ex(MSG originalMsg, int dead_key2set)
 {
     static MSG deadCharExpel;
 
-    if (!dead_key)
+    if (dead_key == DEAD_KEY_OFF)
 	return;
 
-    dead_key = 0;
+    dead_key = dead_key2set;
 
     // Make Windows generate the dead key's character
     deadCharExpel.message = originalMsg.message;
     deadCharExpel.hwnd    = originalMsg.hwnd;
     deadCharExpel.wParam  = VK_SPACE;
 
-    MyTranslateMessage(&deadCharExpel);
+    TranslateMessage(&deadCharExpel);
 
     // re-generate the current character free of the dead char influence
     PostMessage(originalMsg.hwnd, originalMsg.message, originalMsg.wParam,
 							  originalMsg.lParam);
 }
 
+/*
+ * Wrapper for outputDeadKey_rePost_Ex which always reset dead_key value.
+ */
+    static void
+outputDeadKey_rePost(MSG originalMsg)
+{
+    outputDeadKey_rePost_Ex(originalMsg, DEAD_KEY_OFF);
+}
+
+/*
+ * Refactored out part of process_message(), responsible for
+ * handling the case of "not a special key"
+ */
+static void process_message_usual_key(UINT vk, const MSG *pmsg)
+{
+    // marshal to corresponding implementation
+    keycode_trans_strategy_used->ptr_process_message_usual_key(vk, pmsg);
+}
+
+/*
+ * Experimental implementation, introduced in v8.2.4807
+ * "processing key event in Win32 GUI is not ideal"
+ */
+static void process_message_usual_key_experimental(UINT vk, const MSG *pmsg)
+{
+    WCHAR	ch[8];
+    int		len;
+    int		i;
+    UINT	scan_code;
+    BYTE	keyboard_state[256];
+
+    // Construct the state table with only a few modifiers, we don't
+    // really care about the presence of Ctrl/Alt as those modifiers are
+    // handled by Vim separately.
+    memset(keyboard_state, 0, 256);
+    if (GetKeyState(VK_SHIFT) & 0x8000)
+	keyboard_state[VK_SHIFT] = 0x80;
+    if (GetKeyState(VK_CAPITAL) & 0x0001)
+	keyboard_state[VK_CAPITAL] = 0x01;
+    // Alt-Gr is synthesized as Alt + Ctrl.
+    if ((GetKeyState(VK_RMENU) & 0x8000)
+				 && (GetKeyState(VK_CONTROL) & 0x8000))
+    {
+	keyboard_state[VK_MENU] = 0x80;
+	keyboard_state[VK_CONTROL] = 0x80;
+    }
+
+    // Translate the virtual key according to the current keyboard
+    // layout.
+    scan_code = MapVirtualKey(vk, MAPVK_VK_TO_VSC);
+    // Convert the scan-code into a sequence of zero or more unicode
+    // codepoints.
+    // If this is a dead key ToUnicode returns a negative value.
+    len = ToUnicode(vk, scan_code, keyboard_state, ch, ARRAY_LENGTH(ch),
+	    0);
+    if (len < 0)
+	dead_key = DEAD_KEY_SET_DEFAULT;
+
+    if (len <= 0)
+    {
+	int wm_char = NUL;
+
+	if (dead_key == DEAD_KEY_SET_DEFAULT
+		&& (GetKeyState(VK_CONTROL) & 0x8000))
+	{
+	    if (   // AZERTY CTRL+dead_circumflex
+		   (vk == 221 && scan_code == 26)
+		   // QWERTZ CTRL+dead_circumflex
+		|| (vk == 220 && scan_code == 41))
+		wm_char = '[';
+	    if (   // QWERTZ CTRL+dead_two-overdots
+		   (vk == 192 && scan_code == 27))
+		wm_char = ']';
+	}
+	if (wm_char != NUL)
+	{
+	    // post WM_CHAR='[' - which will be interpreted with CTRL
+	    // still hold as ESC
+	    PostMessageW(pmsg->hwnd, WM_CHAR, wm_char, pmsg->lParam);
+	    // ask _OnChar() to not touch this state, wait for next key
+	    // press and maintain knowledge that we are "poisoned" with
+	    // "dead state"
+	    dead_key = DEAD_KEY_TRANSIENT_IN_ON_CHAR;
+	}
+	return;
+    }
+
+    // Post the message as TranslateMessage would do.
+    if (pmsg->message == WM_KEYDOWN)
+    {
+	for (i = 0; i < len; i++)
+	    PostMessageW(pmsg->hwnd, WM_CHAR, ch[i], pmsg->lParam);
+    }
+    else
+    {
+	for (i = 0; i < len; i++)
+	    PostMessageW(pmsg->hwnd, WM_SYSCHAR, ch[i], pmsg->lParam);
+    }
+}
+
+/*
+ * "Classic" implementation, existing prior to v8.2.4807
+ */
+static void process_message_usual_key_classic(UINT vk, const MSG *pmsg)
+{
+    char_u	string[40];
+
+    // Some keys need C-S- where they should only need C-.
+    // Ignore 0xff, Windows XP sends it when NUMLOCK has changed since
+    // system startup (Helmut Stiegler, 2003 Oct 3).
+    if (vk != 0xff
+	    && (GetKeyState(VK_CONTROL) & 0x8000)
+	    && !(GetKeyState(VK_SHIFT) & 0x8000)
+	    && !(GetKeyState(VK_MENU) & 0x8000))
+    {
+	// CTRL-6 is '^'; Japanese keyboard maps '^' to vk == 0xDE
+	if (vk == '6' || MapVirtualKey(vk, 2) == (UINT)'^')
+	{
+	    string[0] = Ctrl_HAT;
+	    add_to_input_buf(string, 1);
+	}
+	// vk == 0xBD AZERTY for CTRL-'-', but CTRL-[ for * QWERTY!
+	else if (vk == 0xBD)	// QWERTY for CTRL-'-'
+	{
+	    string[0] = Ctrl__;
+	    add_to_input_buf(string, 1);
+	}
+	// CTRL-2 is '@'; Japanese keyboard maps '@' to vk == 0xC0
+	else if (vk == '2' || MapVirtualKey(vk, 2) == (UINT)'@')
+	{
+	    string[0] = Ctrl_AT;
+	    add_to_input_buf(string, 1);
+	}
+	else
+	    TranslateMessage(pmsg);
+    }
+    else
+	TranslateMessage(pmsg);
+}
 
 /*
  * Process a single Windows message.
@@ -1774,8 +2290,16 @@ process_message(void)
 #ifdef FEAT_MENU
     static char_u k10[] = {K_SPECIAL, 'k', ';', 0};
 #endif
+    static int  keycode_trans_strategy_initialized = 0;
 
-    pGetMessage(&msg, NULL, 0, 0);
+    // lazy initialize - first time only
+    if (!keycode_trans_strategy_initialized)
+    {
+	keycode_trans_strategy_initialized = 1;
+	keycode_trans_strategy_init();
+    }
+
+    GetMessageW(&msg, NULL, 0, 0);
 
 #ifdef FEAT_OLE
     // Look after OLE Automation commands
@@ -1786,7 +2310,7 @@ process_message(void)
 	{
 	    // Message can't be ours, forward it.  Fixes problem with Ultramon
 	    // 3.0.4
-	    pDispatchMessage(&msg);
+	    DispatchMessageW(&msg);
 	}
 	else
 	{
@@ -1799,7 +2323,7 @@ process_message(void)
 
 #ifdef MSWIN_FIND_REPLACE
     // Don't process messages used by the dialog
-    if (s_findrep_hwnd != NULL && pIsDialogMessage(s_findrep_hwnd, &msg))
+    if (s_findrep_hwnd != NULL && IsDialogMessageW(s_findrep_hwnd, &msg))
     {
 	HandleMouseHide(msg.message, msg.lParam);
 	return;
@@ -1825,11 +2349,54 @@ process_message(void)
 	 *
 	 * - Before doing something special such as regenerating keypresses to
 	 *   expel the dead character as this could trigger an infinite loop if
-	 *   for some reason MyTranslateMessage() do not trigger a call
+	 *   for some reason TranslateMessage() do not trigger a call
 	 *   immediately to _OnChar() (or _OnSysChar()).
 	 */
-	if (dead_key)
+
+	/*
+	 * We are at the moment after WM_CHAR with DEAD_KEY_SKIP_ON_CHAR event
+	 * was handled by _WndProc, this keypress we want to process normally
+	 */
+	if (keycode_trans_strategy_used->is_experimental()
+		&& dead_key == DEAD_KEY_SKIP_ON_CHAR)
 	{
+	    dead_key = DEAD_KEY_OFF;
+	}
+
+	if (dead_key != DEAD_KEY_OFF)
+	{
+	    /*
+	     * Expel the dead key pressed with Ctrl in a special way.
+	     *
+	     * After dead key was pressed with Ctrl in some cases, ESC was
+	     * artificially injected and handled by _OnChar(), now we are
+	     * dealing with completely new key press from the user. If we don't
+	     * do anything, ToUnicode() call will interpret this vk+scan_code
+	     * under influence of "dead-modifier". To prevent this we translate
+	     * this message replacing current char from user with VK_SPACE,
+	     * which will cause WM_CHAR with dead_key's character itself. Using
+	     * DEAD_KEY_SKIP_ON_CHAR value of dead_char we force _OnChar() to
+	     * ignore this one WM_CHAR event completely. Afterwards (due to
+	     * usage of PostMessage), this procedure is scheduled to be called
+	     * again with user char and on next entry we will clean
+	     * DEAD_KEY_SKIP_ON_CHAR. We cannot use original
+	     * outputDeadKey_rePost() since we do not wish to reset dead_key
+	     * value.
+	     */
+	    if (keycode_trans_strategy_used->is_experimental() &&
+		    dead_key == DEAD_KEY_TRANSIENT_IN_ON_CHAR)
+	    {
+		outputDeadKey_rePost_Ex(msg,
+				       /*dead_key2set=*/DEAD_KEY_SKIP_ON_CHAR);
+		return;
+	    }
+
+	    if (dead_key != DEAD_KEY_SET_DEFAULT)
+	    {
+		// should never happen - is there a way to make ASSERT here?
+		return;
+	    }
+
 	    /*
 	     * If a dead key was pressed and the user presses VK_SPACE,
 	     * VK_BACK, or VK_ESCAPE it means that he actually wants to deal
@@ -1844,13 +2411,14 @@ process_message(void)
 	     */
 	    if ((vk == VK_SPACE || vk == VK_BACK || vk == VK_ESCAPE))
 	    {
-		dead_key = 0;
-		MyTranslateMessage(&msg);
+		dead_key = DEAD_KEY_OFF;
+		TranslateMessage(&msg);
 		return;
 	    }
 	    // In modes where we are not typing, dead keys should behave
 	    // normally
-	    else if (!(get_real_state() & (INSERT | CMDLINE | SELECTMODE)))
+	    else if ((get_real_state()
+			    & (MODE_INSERT | MODE_CMDLINE | MODE_SELECT)) == 0)
 	    {
 		outputDeadKey_rePost(msg);
 		return;
@@ -1867,6 +2435,13 @@ process_message(void)
 	    add_to_input_buf(string, 1);
 	}
 
+	// This is an IME event or a synthetic keystroke, let Windows handle it.
+	if (vk == VK_PROCESSKEY || vk == VK_PACKET)
+	{
+	    TranslateMessage(&msg);
+	    return;
+	}
+
 	for (i = 0; special_keys[i].key_sym != 0; i++)
 	{
 	    // ignore VK_SPACE when ALT key pressed: system menu
@@ -1879,7 +2454,8 @@ process_message(void)
 		 * character output (such as a NUMPAD printable character or
 		 * the TAB key, etc...).
 		 */
-		if (dead_key && (special_keys[i].vim_code0 == 'K'
+		if (dead_key == DEAD_KEY_SET_DEFAULT
+			&& (special_keys[i].vim_code0 == 'K'
 						|| vk == VK_TAB || vk == CAR))
 		{
 		    outputDeadKey_rePost(msg);
@@ -1895,21 +2471,7 @@ process_message(void)
 							  NULL, NULL) == NULL)
 		    break;
 #endif
-		if (GetKeyState(VK_SHIFT) & 0x8000)
-		    modifiers |= MOD_MASK_SHIFT;
-		/*
-		 * Don't use caps-lock as shift, because these are special keys
-		 * being considered here, and we only want letters to get
-		 * shifted -- webb
-		 */
-		/*
-		if (GetKeyState(VK_CAPITAL) & 0x0001)
-		    modifiers ^= MOD_MASK_SHIFT;
-		*/
-		if (GetKeyState(VK_CONTROL) & 0x8000)
-		    modifiers |= MOD_MASK_CTRL;
-		if (GetKeyState(VK_MENU) & 0x8000)
-		    modifiers |= MOD_MASK_ALT;
+		modifiers = get_active_modifiers_via_ptr();
 
 		if (special_keys[i].vim_code1 == NUL)
 		    key = special_keys[i].vim_code0;
@@ -1946,39 +2508,11 @@ process_message(void)
 		break;
 	    }
 	}
+
+	// Not a special key.
 	if (special_keys[i].key_sym == 0)
 	{
-	    // Some keys need C-S- where they should only need C-.
-	    // Ignore 0xff, Windows XP sends it when NUMLOCK has changed since
-	    // system startup (Helmut Stiegler, 2003 Oct 3).
-	    if (vk != 0xff
-		    && (GetKeyState(VK_CONTROL) & 0x8000)
-		    && !(GetKeyState(VK_SHIFT) & 0x8000)
-		    && !(GetKeyState(VK_MENU) & 0x8000))
-	    {
-		// CTRL-6 is '^'; Japanese keyboard maps '^' to vk == 0xDE
-		if (vk == '6' || MapVirtualKey(vk, 2) == (UINT)'^')
-		{
-		    string[0] = Ctrl_HAT;
-		    add_to_input_buf(string, 1);
-		}
-		// vk == 0xBD AZERTY for CTRL-'-', but CTRL-[ for * QWERTY!
-		else if (vk == 0xBD)	// QWERTY for CTRL-'-'
-		{
-		    string[0] = Ctrl__;
-		    add_to_input_buf(string, 1);
-		}
-		// CTRL-2 is '@'; Japanese keyboard maps '@' to vk == 0xC0
-		else if (vk == '2' || MapVirtualKey(vk, 2) == (UINT)'@')
-		{
-		    string[0] = Ctrl_AT;
-		    add_to_input_buf(string, 1);
-		}
-		else
-		    MyTranslateMessage(&msg);
-	    }
-	    else
-		MyTranslateMessage(&msg);
+	    process_message_usual_key(vk, &msg);
 	}
     }
 #ifdef FEAT_MBYTE_IME
@@ -1986,20 +2520,7 @@ process_message(void)
 	_OnImeNotify(msg.hwnd, (DWORD)msg.wParam, (DWORD)msg.lParam);
     else if (msg.message == WM_KEYUP && im_get_status())
 	// added for non-MS IME (Yasuhiro Matsumoto)
-	MyTranslateMessage(&msg);
-#endif
-#if !defined(FEAT_MBYTE_IME) && defined(GLOBAL_IME)
-// GIME_TEST
-    else if (msg.message == WM_IME_STARTCOMPOSITION)
-    {
-	POINT point;
-
-	global_ime_set_font(&norm_logfont);
-	point.x = FILL_X(gui.col);
-	point.y = FILL_Y(gui.row);
-	MapWindowPoints(s_textArea, s_hwnd, &point, 1);
-	global_ime_set_position(&point);
-    }
+	TranslateMessage(&msg);
 #endif
 
 #ifdef FEAT_MENU
@@ -2009,7 +2530,7 @@ process_message(void)
     if (vk != VK_F10 || check_map(k10, State, FALSE, TRUE, FALSE,
 							  NULL, NULL) == NULL)
 #endif
-	pDispatchMessage(&msg);
+	DispatchMessageW(&msg);
 }
 
 /*
@@ -2024,7 +2545,7 @@ gui_mch_update(void)
     MSG	    msg;
 
     if (!s_busy_processing)
-	while (pPeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE)
+	while (PeekMessageW(&msg, NULL, 0, 0, PM_NOREMOVE)
 						  && !vim_is_input_buf_full())
 	    process_message();
 }
@@ -2039,7 +2560,7 @@ remove_any_timer(void)
 	KillTimer(NULL, s_wait_timer);
 
 	// Eat spurious WM_TIMER messages
-	while (pPeekMessage(&msg, s_hwnd, WM_TIMER, WM_TIMER, PM_REMOVE))
+	while (PeekMessageW(&msg, s_hwnd, WM_TIMER, WM_TIMER, PM_REMOVE))
 	    ;
 	s_wait_timer = 0;
     }
@@ -2068,8 +2589,8 @@ gui_mch_wait_for_chars(int wtime)
 	    return FAIL;
 
 	// When called with "wtime" zero, just want one msec.
-	s_wait_timer = (UINT)SetTimer(NULL, 0, (UINT)(wtime == 0 ? 1 : wtime),
-							 (TIMERPROC)_OnTimer);
+	s_wait_timer = SetTimer(NULL, 0, (UINT)(wtime == 0 ? 1 : wtime),
+								_OnTimer);
     }
 
     allow_scrollbar = TRUE;
@@ -2107,13 +2628,16 @@ gui_mch_wait_for_chars(int wtime)
 	    if (did_add_timer)
 		break;
 # endif
-	    if (pPeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE))
+	    if (PeekMessageW(&msg, NULL, 0, 0, PM_NOREMOVE))
 	    {
 		process_message();
 		break;
 	    }
 	    else if (input_available()
-		    || MsgWaitForMultipleObjects(0, NULL, FALSE, 100,
+		    // TODO: The 10 msec is a compromise between laggy response
+		    // and consuming more CPU time.  Better would be to handle
+		    // channel messages when they arrive.
+		    || MsgWaitForMultipleObjects(0, NULL, FALSE, 10,
 						  QS_ALLINPUT) != WAIT_TIMEOUT)
 		break;
 	}
@@ -2381,10 +2905,6 @@ gui_mch_show_toolbar(int showit)
 
     if (showit)
     {
-# ifndef TB_SETUNICODEFORMAT
-    // For older compilers.  We assume this never changes.
-#  define TB_SETUNICODEFORMAT 0x2005
-# endif
 	// Enable unicode support
 	SendMessage(s_toolbarhwnd, TB_SETUNICODEFORMAT, (WPARAM)TRUE,
 								(LPARAM)0);
@@ -2428,11 +2948,7 @@ show_tabline_popup_menu(void)
     POINT	    pt;
 
     // When ignoring events don't show the menu.
-    if (hold_gui_events
-# ifdef FEAT_CMDWIN
-	    || cmdwin_type != 0
-# endif
-       )
+    if (hold_gui_events || cmdwin_type != 0)
 	return;
 
     tab_pmenu = CreatePopupMenu();
@@ -2518,10 +3034,6 @@ gui_mch_update_tabline(void)
     if (s_tabhwnd == NULL)
 	return;
 
-# ifndef CCM_SETUNICODEFORMAT
-    // For older compilers.  We assume this never changes.
-#  define CCM_SETUNICODEFORMAT 0x2005
-# endif
     // Enable unicode support
     SendMessage(s_tabhwnd, CCM_SETUNICODEFORMAT, (WPARAM)TRUE, (LPARAM)0);
 
@@ -2695,7 +3207,7 @@ gui_mch_find_dialog(exarg_T *eap)
 	if (!IsWindow(s_findrep_hwnd))
 	{
 	    initialise_findrep(eap->arg);
-	    s_findrep_hwnd = FindTextW((LPFINDREPLACEW) &s_findrep_struct);
+	    s_findrep_hwnd = FindTextW(&s_findrep_struct);
 	}
 
 	set_window_title(s_findrep_hwnd, _("Find string"));
@@ -2719,7 +3231,7 @@ gui_mch_replace_dialog(exarg_T *eap)
 	if (!IsWindow(s_findrep_hwnd))
 	{
 	    initialise_findrep(eap->arg);
-	    s_findrep_hwnd = ReplaceTextW((LPFINDREPLACEW) &s_findrep_struct);
+	    s_findrep_hwnd = ReplaceTextW(&s_findrep_struct);
 	}
 
 	set_window_title(s_findrep_hwnd, _("Find & Replace"));
@@ -2737,11 +3249,11 @@ gui_mch_replace_dialog(exarg_T *eap)
     void
 gui_mch_mousehide(int hide)
 {
-    if (hide != gui.pointer_hidden)
-    {
-	ShowCursor(!hide);
-	gui.pointer_hidden = hide;
-    }
+    if (hide == gui.pointer_hidden)
+	return;
+
+    ShowCursor(!hide);
+    gui.pointer_hidden = hide;
 }
 
 #ifdef FEAT_MENU
@@ -2798,33 +3310,33 @@ _OnDestroy(HWND hwnd)
 _OnPaint(
     HWND hwnd)
 {
-    if (!IsMinimized(hwnd))
+    if (IsMinimized(hwnd))
+	return;
+
+    PAINTSTRUCT ps;
+
+    out_flush();	    // make sure all output has been processed
+    (void)BeginPaint(hwnd, &ps);
+
+    // prevent multi-byte characters from misprinting on an invalid
+    // rectangle
+    if (has_mbyte)
     {
-	PAINTSTRUCT ps;
+	RECT rect;
 
-	out_flush();	    // make sure all output has been processed
-	(void)BeginPaint(hwnd, &ps);
-
-	// prevent multi-byte characters from misprinting on an invalid
-	// rectangle
-	if (has_mbyte)
-	{
-	    RECT rect;
-
-	    GetClientRect(hwnd, &rect);
-	    ps.rcPaint.left = rect.left;
-	    ps.rcPaint.right = rect.right;
-	}
-
-	if (!IsRectEmpty(&ps.rcPaint))
-	{
-	    gui_redraw(ps.rcPaint.left, ps.rcPaint.top,
-		    ps.rcPaint.right - ps.rcPaint.left + 1,
-		    ps.rcPaint.bottom - ps.rcPaint.top + 1);
-	}
-
-	EndPaint(hwnd, &ps);
+	GetClientRect(hwnd, &rect);
+	ps.rcPaint.left = rect.left;
+	ps.rcPaint.right = rect.right;
     }
+
+    if (!IsRectEmpty(&ps.rcPaint))
+    {
+	gui_redraw(ps.rcPaint.left, ps.rcPaint.top,
+		ps.rcPaint.right - ps.rcPaint.left + 1,
+		ps.rcPaint.bottom - ps.rcPaint.top + 1);
+    }
+
+    EndPaint(hwnd, &ps);
 }
 
     static void
@@ -2834,14 +3346,12 @@ _OnSize(
     int cx,
     int cy)
 {
-    if (!IsMinimized(hwnd))
+    if (!IsMinimized(hwnd) && !s_in_dpichanged)
     {
 	gui_resize_shell(cx, cy);
 
-#ifdef FEAT_MENU
 	// Menu bar may wrap differently now
 	gui_mswin_get_menu_height(TRUE);
-#endif
     }
 }
 
@@ -2852,7 +3362,7 @@ _OnSetFocus(
 {
     gui_focus_change(TRUE);
     s_getting_focus = TRUE;
-    (void)MyWindowProc(hwnd, WM_SETFOCUS, (WPARAM)hwndOldFocus, 0);
+    (void)DefWindowProcW(hwnd, WM_SETFOCUS, (WPARAM)hwndOldFocus, 0);
 }
 
     static void
@@ -2860,9 +3370,11 @@ _OnKillFocus(
     HWND hwnd,
     HWND hwndNewFocus)
 {
+    if (destroying)
+	return;
     gui_focus_change(FALSE);
     s_getting_focus = FALSE;
-    (void)MyWindowProc(hwnd, WM_KILLFOCUS, (WPARAM)hwndNewFocus, 0);
+    (void)DefWindowProcW(hwnd, WM_KILLFOCUS, (WPARAM)hwndNewFocus, 0);
 }
 
 /*
@@ -2876,7 +3388,7 @@ _OnActivateApp(
 {
     // we call gui_focus_change() in _OnSetFocus()
     // gui_focus_change((int)fActivate);
-    return MyWindowProc(hwnd, WM_ACTIVATEAPP, fActivate, (DWORD)dwThreadId);
+    return DefWindowProcW(hwnd, WM_ACTIVATEAPP, fActivate, (DWORD)dwThreadId);
 }
 
     void
@@ -2895,7 +3407,7 @@ gui_mch_getmouse(int *x, int *y)
     POINT mp;
 
     (void)GetWindowRect(s_textArea, &rct);
-    (void)GetCursorPos((LPPOINT)&mp);
+    (void)GetCursorPos(&mp);
     *x = (int)(mp.x - rct.left);
     *y = (int)(mp.y - rct.top);
 }
@@ -2918,25 +3430,24 @@ gui_mswin_get_valid_dimensions(
     int w,
     int h,
     int *valid_w,
-    int *valid_h)
+    int *valid_h,
+    int *cols,
+    int *rows)
 {
     int	    base_width, base_height;
 
     base_width = gui_get_base_width()
-	+ (GetSystemMetrics(SM_CXFRAME) +
-	   GetSystemMetrics(SM_CXPADDEDBORDER)) * 2;
+	+ (pGetSystemMetricsForDpi(SM_CXFRAME, s_dpi) +
+	   pGetSystemMetricsForDpi(SM_CXPADDEDBORDER, s_dpi)) * 2;
     base_height = gui_get_base_height()
-	+ (GetSystemMetrics(SM_CYFRAME) +
-	   GetSystemMetrics(SM_CXPADDEDBORDER)) * 2
-	+ GetSystemMetrics(SM_CYCAPTION)
-#ifdef FEAT_MENU
-	+ gui_mswin_get_menu_height(FALSE)
-#endif
-	;
-    *valid_w = base_width +
-		    ((w - base_width) / gui.char_width) * gui.char_width;
-    *valid_h = base_height +
-		    ((h - base_height) / gui.char_height) * gui.char_height;
+	+ (pGetSystemMetricsForDpi(SM_CYFRAME, s_dpi) +
+	   pGetSystemMetricsForDpi(SM_CXPADDEDBORDER, s_dpi)) * 2
+	+ pGetSystemMetricsForDpi(SM_CYCAPTION, s_dpi)
+	+ gui_mswin_get_menu_height(FALSE);
+    *cols = (w - base_width) / gui.char_width;
+    *rows = (h - base_height) / gui.char_height;
+    *valid_w = base_width + *cols * gui.char_width;
+    *valid_h = base_height + *rows * gui.char_height;
 }
 
     void
@@ -2965,6 +3476,49 @@ gui_mch_flash(int msec)
 }
 
 /*
+ * Check if the specified point is on-screen. (multi-monitor aware)
+ */
+    static BOOL
+is_point_onscreen(int x, int y)
+{
+    POINT   pt = {x, y};
+
+    return MonitorFromPoint(pt, MONITOR_DEFAULTTONULL) != NULL;
+}
+
+/*
+ * Check if the whole client area of the specified window is on-screen.
+ *
+ * Note about DirectX: Windows 10 1809 or above no longer maintains image of
+ * the window portion that is off-screen.  Scrolling by DWriteContext_Scroll()
+ * only works when the whole window is on-screen.
+ */
+    static BOOL
+is_window_onscreen(HWND hwnd)
+{
+    RECT    rc;
+    POINT   p1, p2;
+
+    GetClientRect(hwnd, &rc);
+    p1.x = rc.left;
+    p1.y = rc.top;
+    p2.x = rc.right - 1;
+    p2.y = rc.bottom - 1;
+    ClientToScreen(hwnd, &p1);
+    ClientToScreen(hwnd, &p2);
+
+    if (!is_point_onscreen(p1.x, p1.y))
+	return FALSE;
+    if (!is_point_onscreen(p1.x, p2.y))
+	return FALSE;
+    if (!is_point_onscreen(p2.x, p1.y))
+	return FALSE;
+    if (!is_point_onscreen(p2.x, p2.y))
+	return FALSE;
+    return TRUE;
+}
+
+/*
  * Return flags used for scrolling.
  * The SW_INVALIDATE is required when part of the window is covered or
  * off-screen. Refer to MS KB Q75236.
@@ -2975,15 +3529,12 @@ get_scroll_flags(void)
     HWND	hwnd;
     RECT	rcVim, rcOther, rcDest;
 
-    GetWindowRect(s_hwnd, &rcVim);
-
-    // Check if the window is partly above or below the screen.  We don't care
-    // about partly left or right of the screen, it is not relevant when
-    // scrolling up or down.
-    if (rcVim.top < 0 || rcVim.bottom > GetSystemMetrics(SM_CYFULLSCREEN))
+    // Check if the window is (partly) off-screen.
+    if (!is_window_onscreen(s_hwnd))
 	return SW_INVALIDATE;
 
-    // Check if there is an window (partly) on top of us.
+    // Check if there is a window (partly) on top of us.
+    GetWindowRect(s_hwnd, &rcVim);
     for (hwnd = s_hwnd; (hwnd = GetWindow(hwnd, GW_HWNDPREV)) != (HWND)0; )
 	if (IsWindowVisible(hwnd))
 	{
@@ -3025,14 +3576,17 @@ gui_mch_delete_lines(
     rc.bottom = FILL_Y(gui.scroll_region_bot + 1);
 
 #if defined(FEAT_DIRECTX)
-    if (IS_ENABLE_DIRECTX())
+    if (IS_ENABLE_DIRECTX() && is_window_onscreen(s_hwnd))
     {
 	DWriteContext_Scroll(s_dwc, 0, -num_lines * gui.char_height, &rc);
-	DWriteContext_Flush(s_dwc);
     }
     else
 #endif
     {
+#if defined(FEAT_DIRECTX)
+	if (IS_ENABLE_DIRECTX())
+	    DWriteContext_Flush(s_dwc);
+#endif
 	intel_gpu_workaround();
 	ScrollWindowEx(s_textArea, 0, -num_lines * gui.char_height,
 				    &rc, &rc, NULL, NULL, get_scroll_flags());
@@ -3067,14 +3621,17 @@ gui_mch_insert_lines(
     rc.bottom = FILL_Y(gui.scroll_region_bot + 1);
 
 #if defined(FEAT_DIRECTX)
-    if (IS_ENABLE_DIRECTX())
+    if (IS_ENABLE_DIRECTX() && is_window_onscreen(s_hwnd))
     {
 	DWriteContext_Scroll(s_dwc, 0, num_lines * gui.char_height, &rc);
-	DWriteContext_Flush(s_dwc);
     }
     else
 #endif
     {
+#if defined(FEAT_DIRECTX)
+	if (IS_ENABLE_DIRECTX())
+	    DWriteContext_Flush(s_dwc);
+#endif
 	intel_gpu_workaround();
 	// The SW_INVALIDATE is required when part of the window is covered or
 	// off-screen.  How do we avoid it when it's not needed?
@@ -3111,10 +3668,6 @@ gui_mch_exit(int rc UNUSED)
 	destroying = TRUE;	// ignore WM_DESTROY message now
 	DestroyWindow(s_hwnd);
     }
-
-#ifdef GLOBAL_IME
-    global_ime_end();
-#endif
 }
 
     static char_u *
@@ -3180,12 +3733,12 @@ logfont2name(LOGFONTW lf)
 #ifdef FEAT_MBYTE_IME
 /*
  * Set correct LOGFONTW to IME.  Use 'guifontwide' if available, otherwise use
- * 'guifont'
+ * 'guifont'.
  */
     static void
 update_im_font(void)
 {
-    LOGFONTW	lf_wide;
+    LOGFONTW	lf_wide, lf;
 
     if (p_guifontwide != NULL && *p_guifontwide != NUL
 	    && gui.wide_font != NOFONT
@@ -3193,7 +3746,12 @@ update_im_font(void)
 	norm_logfont = lf_wide;
     else
 	norm_logfont = sub_logfont;
-    im_set_font(&norm_logfont);
+
+    lf = norm_logfont;
+    if (s_process_dpi_aware == DPI_AWARENESS_UNAWARE)
+	// Work around when PerMonitorV2 is not enabled in the process level.
+	lf.lfHeight = lf.lfHeight * DEFAULT_DPI / s_dpi;
+    im_set_font(&lf);
 }
 #endif
 
@@ -3245,39 +3803,39 @@ gui_mch_wide_font_changed(void)
     int
 gui_mch_init_font(char_u *font_name, int fontset UNUSED)
 {
-    LOGFONTW	lf;
+    LOGFONTW	lf, lfOrig;
     GuiFont	font = NOFONT;
     char_u	*p;
 
     // Load the font
     if (get_logfont(&lf, font_name, NULL, TRUE) == OK)
+    {
+	lfOrig = lf;
+	lf.lfHeight = adjust_fontsize_by_dpi(lf.lfHeight);
 	font = get_font_handle(&lf);
+    }
     if (font == NOFONT)
 	return FAIL;
 
     if (font_name == NULL)
-	font_name = (char_u *)lf.lfFaceName;
-#if defined(FEAT_MBYTE_IME) || defined(GLOBAL_IME)
+	font_name = (char_u *)"";
+#ifdef FEAT_MBYTE_IME
     norm_logfont = lf;
-#endif
-#ifdef FEAT_MBYTE_IME
     sub_logfont = lf;
-#endif
-#ifdef FEAT_MBYTE_IME
-    update_im_font();
+    if (!s_in_dpichanged)
+	update_im_font();
 #endif
     gui_mch_free_font(gui.norm_font);
     gui.norm_font = font;
-    current_font_height = lf.lfHeight;
-    GetFontSize(font);
+    current_font_height = lfOrig.lfHeight;
+    UpdateFontSize(font);
 
-    p = logfont2name(lf);
+    p = logfont2name(lfOrig);
     if (p != NULL)
     {
 	hl_set_font_name(p);
 
 	// When setting 'guifont' to "*" replace it with the actual font name.
-	//
 	if (STRCMP(font_name, "*") == 0 && STRCMP(p_guifont, "*") == 0)
 	{
 	    vim_free(p_guifont);
@@ -3314,25 +3872,35 @@ gui_mch_init_font(char_u *font_name, int fontset UNUSED)
     return OK;
 }
 
-#ifndef WPF_RESTORETOMAXIMIZED
-# define WPF_RESTORETOMAXIMIZED 2   // just in case someone doesn't have it
-#endif
-
 /*
  * Return TRUE if the GUI window is maximized, filling the whole screen.
+ * Also return TRUE if the window is snapped.
  */
     int
 gui_mch_maximized(void)
 {
     WINDOWPLACEMENT wp;
+    RECT	    rc;
 
     wp.length = sizeof(WINDOWPLACEMENT);
     if (GetWindowPlacement(s_hwnd, &wp))
-	return wp.showCmd == SW_SHOWMAXIMIZED
+    {
+	if (wp.showCmd == SW_SHOWMAXIMIZED
 	    || (wp.showCmd == SW_SHOWMINIMIZED
-		    && wp.flags == WPF_RESTORETOMAXIMIZED);
+		    && wp.flags == WPF_RESTORETOMAXIMIZED))
+	    return TRUE;
+	if (wp.showCmd == SW_SHOWMINIMIZED)
+	    return FALSE;
 
-    return 0;
+	// Assume the window is snapped when the sizes from two APIs differ.
+	GetWindowRect(s_hwnd, &rc);
+	if ((rc.right - rc.left !=
+		    wp.rcNormalPosition.right - wp.rcNormalPosition.left)
+		|| (rc.bottom - rc.top !=
+		    wp.rcNormalPosition.bottom - wp.rcNormalPosition.top))
+	    return TRUE;
+    }
+    return FALSE;
 }
 
 /*
@@ -3349,26 +3917,19 @@ gui_mch_newfont(void)
     if (win_socket_id == 0)
     {
 	gui_resize_shell(rect.right - rect.left
-	    - (GetSystemMetrics(SM_CXFRAME) +
-	       GetSystemMetrics(SM_CXPADDEDBORDER)) * 2,
+	    - (pGetSystemMetricsForDpi(SM_CXFRAME, s_dpi) +
+	       pGetSystemMetricsForDpi(SM_CXPADDEDBORDER, s_dpi)) * 2,
 	    rect.bottom - rect.top
-	    - (GetSystemMetrics(SM_CYFRAME) +
-	       GetSystemMetrics(SM_CXPADDEDBORDER)) * 2
-	    - GetSystemMetrics(SM_CYCAPTION)
-#ifdef FEAT_MENU
-	    - gui_mswin_get_menu_height(FALSE)
-#endif
-	);
+	    - (pGetSystemMetricsForDpi(SM_CYFRAME, s_dpi) +
+	       pGetSystemMetricsForDpi(SM_CXPADDEDBORDER, s_dpi)) * 2
+	    - pGetSystemMetricsForDpi(SM_CYCAPTION, s_dpi)
+	    - gui_mswin_get_menu_height(FALSE));
     }
     else
     {
 	// Inside another window, don't use the frame and border.
 	gui_resize_shell(rect.right - rect.left,
-	    rect.bottom - rect.top
-#ifdef FEAT_MENU
-			- gui_mswin_get_menu_height(FALSE)
-#endif
-	);
+	    rect.bottom - rect.top - gui_mswin_get_menu_height(FALSE));
     }
 }
 
@@ -3426,7 +3987,7 @@ mch_set_mouse_shape(int shape)
 	    POINT mp;
 
 	    // Set the position to make it redrawn with the new shape.
-	    (void)GetCursorPos((LPPOINT)&mp);
+	    (void)GetCursorPos(&mp);
 	    (void)SetCursorPos(mp.x, mp.y);
 	    ShowCursor(TRUE);
 	}
@@ -3484,6 +4045,7 @@ gui_mch_browse(
     WCHAR		*initdirp = NULL;
     WCHAR		*filterp;
     char_u		*p, *q;
+    BOOL		ret;
 
     if (dflt == NULL)
 	fileBuf[0] = NUL;
@@ -3552,22 +4114,19 @@ gui_mch_browse(
 	fileStruct.Flags |= OFN_NODEREFERENCELINKS;
 # endif
     if (saving)
-    {
-	if (!GetSaveFileNameW(&fileStruct))
-	    return NULL;
-    }
+	ret = GetSaveFileNameW(&fileStruct);
     else
-    {
-	if (!GetOpenFileNameW(&fileStruct))
-	    return NULL;
-    }
+	ret = GetOpenFileNameW(&fileStruct);
 
     vim_free(filterp);
     vim_free(initdirp);
     vim_free(titlep);
     vim_free(extp);
 
-    // Convert from UCS2 to 'encoding'.
+    if (!ret)
+	return NULL;
+
+    // Convert from UTF-16 to 'encoding'.
     p = utf16_to_enc(fileBuf, NULL);
     if (p == NULL)
 	return NULL;
@@ -3640,8 +4199,6 @@ _OnDropFiles(
     POINT   pt;
     int_u   modifiers = 0;
 
-    // TRACE("_OnDropFiles: %d files dropped\n", cFiles);
-
     // Obtain dropped position
     DragQueryPoint(hDrop, &pt);
     MapWindowPoints(s_hwnd, s_textArea, &pt, 1);
@@ -3664,19 +4221,21 @@ _OnDropFiles(
 
     DragFinish(hDrop);
 
-    if (fnames != NULL)
-    {
-	if ((GetKeyState(VK_SHIFT) & 0x8000) != 0)
-	    modifiers |= MOUSE_SHIFT;
-	if ((GetKeyState(VK_CONTROL) & 0x8000) != 0)
-	    modifiers |= MOUSE_CTRL;
-	if ((GetKeyState(VK_MENU) & 0x8000) != 0)
-	    modifiers |= MOUSE_ALT;
+    if (fnames == NULL)
+	return;
 
-	gui_handle_drop(pt.x, pt.y, modifiers, fnames, cFiles);
+    int kbd_modifiers = get_active_modifiers();
 
-	s_need_activate = TRUE;
-    }
+    if ((kbd_modifiers & MOD_MASK_SHIFT) != 0)
+	modifiers |= MOUSE_SHIFT;
+    if ((kbd_modifiers & MOD_MASK_CTRL) != 0)
+	modifiers |= MOUSE_CTRL;
+    if ((kbd_modifiers & MOD_MASK_ALT) != 0)
+	modifiers |= MOUSE_ALT;
+
+    gui_handle_drop(pt.x, pt.y, modifiers, fnames, cFiles);
+
+    s_need_activate = TRUE;
 }
 
     static int
@@ -3796,117 +4355,6 @@ _OnScroll(
 # include "xpm_w32.h"
 #endif
 
-#ifdef PROTO
-# define WINAPI
-#endif
-
-#ifdef __MINGW32__
-/*
- * Add a lot of missing defines.
- * They are not always missing, we need the #ifndef's.
- */
-# ifndef IsMinimized
-#  define     IsMinimized(hwnd)		IsIconic(hwnd)
-# endif
-# ifndef IsMaximized
-#  define     IsMaximized(hwnd)		IsZoomed(hwnd)
-# endif
-# ifndef SelectFont
-#  define     SelectFont(hdc, hfont)  ((HFONT)SelectObject((hdc), (HGDIOBJ)(HFONT)(hfont)))
-# endif
-# ifndef GetStockBrush
-#  define     GetStockBrush(i)     ((HBRUSH)GetStockObject(i))
-# endif
-# ifndef DeleteBrush
-#  define     DeleteBrush(hbr)     DeleteObject((HGDIOBJ)(HBRUSH)(hbr))
-# endif
-
-# ifndef HANDLE_WM_RBUTTONDBLCLK
-#  define HANDLE_WM_RBUTTONDBLCLK(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), TRUE, (int)(short)LOWORD(lParam), (int)(short)HIWORD(lParam), (UINT)(wParam)), 0L)
-# endif
-# ifndef HANDLE_WM_MBUTTONUP
-#  define HANDLE_WM_MBUTTONUP(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), (int)(short)LOWORD(lParam), (int)(short)HIWORD(lParam), (UINT)(wParam)), 0L)
-# endif
-# ifndef HANDLE_WM_MBUTTONDBLCLK
-#  define HANDLE_WM_MBUTTONDBLCLK(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), TRUE, (int)(short)LOWORD(lParam), (int)(short)HIWORD(lParam), (UINT)(wParam)), 0L)
-# endif
-# ifndef HANDLE_WM_LBUTTONDBLCLK
-#  define HANDLE_WM_LBUTTONDBLCLK(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), TRUE, (int)(short)LOWORD(lParam), (int)(short)HIWORD(lParam), (UINT)(wParam)), 0L)
-# endif
-# ifndef HANDLE_WM_RBUTTONDOWN
-#  define HANDLE_WM_RBUTTONDOWN(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), FALSE, (int)(short)LOWORD(lParam), (int)(short)HIWORD(lParam), (UINT)(wParam)), 0L)
-# endif
-# ifndef HANDLE_WM_MOUSEMOVE
-#  define HANDLE_WM_MOUSEMOVE(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), (int)(short)LOWORD(lParam), (int)(short)HIWORD(lParam), (UINT)(wParam)), 0L)
-# endif
-# ifndef HANDLE_WM_RBUTTONUP
-#  define HANDLE_WM_RBUTTONUP(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), (int)(short)LOWORD(lParam), (int)(short)HIWORD(lParam), (UINT)(wParam)), 0L)
-# endif
-# ifndef HANDLE_WM_MBUTTONDOWN
-#  define HANDLE_WM_MBUTTONDOWN(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), FALSE, (int)(short)LOWORD(lParam), (int)(short)HIWORD(lParam), (UINT)(wParam)), 0L)
-# endif
-# ifndef HANDLE_WM_LBUTTONUP
-#  define HANDLE_WM_LBUTTONUP(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), (int)(short)LOWORD(lParam), (int)(short)HIWORD(lParam), (UINT)(wParam)), 0L)
-# endif
-# ifndef HANDLE_WM_LBUTTONDOWN
-#  define HANDLE_WM_LBUTTONDOWN(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), FALSE, (int)(short)LOWORD(lParam), (int)(short)HIWORD(lParam), (UINT)(wParam)), 0L)
-# endif
-# ifndef HANDLE_WM_SYSCHAR
-#  define HANDLE_WM_SYSCHAR(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), (TCHAR)(wParam), (int)(short)LOWORD(lParam)), 0L)
-# endif
-# ifndef HANDLE_WM_ACTIVATEAPP
-#  define HANDLE_WM_ACTIVATEAPP(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), (BOOL)(wParam), (DWORD)(lParam)), 0L)
-# endif
-# ifndef HANDLE_WM_WINDOWPOSCHANGING
-#  define HANDLE_WM_WINDOWPOSCHANGING(hwnd, wParam, lParam, fn) \
-    (LRESULT)(DWORD)(BOOL)(fn)((hwnd), (LPWINDOWPOS)(lParam))
-# endif
-# ifndef HANDLE_WM_VSCROLL
-#  define HANDLE_WM_VSCROLL(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), (HWND)(lParam), (UINT)(LOWORD(wParam)),  (int)(short)HIWORD(wParam)), 0L)
-# endif
-# ifndef HANDLE_WM_SETFOCUS
-#  define HANDLE_WM_SETFOCUS(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), (HWND)(wParam)), 0L)
-# endif
-# ifndef HANDLE_WM_KILLFOCUS
-#  define HANDLE_WM_KILLFOCUS(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), (HWND)(wParam)), 0L)
-# endif
-# ifndef HANDLE_WM_HSCROLL
-#  define HANDLE_WM_HSCROLL(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), (HWND)(lParam), (UINT)(LOWORD(wParam)), (int)(short)HIWORD(wParam)), 0L)
-# endif
-# ifndef HANDLE_WM_DROPFILES
-#  define HANDLE_WM_DROPFILES(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), (HDROP)(wParam)), 0L)
-# endif
-# ifndef HANDLE_WM_CHAR
-#  define HANDLE_WM_CHAR(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), (TCHAR)(wParam), (int)(short)LOWORD(lParam)), 0L)
-# endif
-# ifndef HANDLE_WM_SYSDEADCHAR
-#  define HANDLE_WM_SYSDEADCHAR(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), (TCHAR)(wParam), (int)(short)LOWORD(lParam)), 0L)
-# endif
-# ifndef HANDLE_WM_DEADCHAR
-#  define HANDLE_WM_DEADCHAR(hwnd, wParam, lParam, fn) \
-    ((fn)((hwnd), (TCHAR)(wParam), (int)(short)LOWORD(lParam)), 0L)
-# endif
-#endif // __MINGW32__
-
 
 // Some parameters for tearoff menus.  All in pixels.
 #define TEAROFF_PADDING_X	2
@@ -3916,143 +4364,15 @@ _OnScroll(
 #define TEAROFF_COLUMN_PADDING	3	// # spaces to pad column with.
 
 
-// For the Intellimouse:
-#ifndef WM_MOUSEWHEEL
-# define WM_MOUSEWHEEL	0x20a
-#endif
-
-
 #ifdef FEAT_BEVAL_GUI
 # define ID_BEVAL_TOOLTIP   200
 # define BEVAL_TEXT_LEN	    MAXPATHL
 
-# if (defined(_MSC_VER) && _MSC_VER < 1300) || !defined(MAXULONG_PTR)
-// Work around old versions of basetsd.h which wrongly declares
-// UINT_PTR as unsigned long.
-#  undef  UINT_PTR
-#  define UINT_PTR UINT
-# endif
-
 static BalloonEval  *cur_beval = NULL;
-static UINT_PTR	    BevalTimerId = 0;
-static DWORD	    LastActivity = 0;
-
-
-// cproto fails on missing include files
-# ifndef PROTO
-
-/*
- * excerpts from headers since this may not be presented
- * in the extremely old compilers
- */
-#  include <pshpack1.h>
-
-# endif
-
-typedef struct _DllVersionInfo
-{
-    DWORD cbSize;
-    DWORD dwMajorVersion;
-    DWORD dwMinorVersion;
-    DWORD dwBuildNumber;
-    DWORD dwPlatformID;
-} DLLVERSIONINFO;
-
-# ifndef PROTO
-#  include <poppack.h>
-# endif
-
-typedef struct tagTOOLINFOA_NEW
-{
-    UINT       cbSize;
-    UINT       uFlags;
-    HWND       hwnd;
-    UINT_PTR   uId;
-    RECT       rect;
-    HINSTANCE  hinst;
-    LPSTR      lpszText;
-    LPARAM     lParam;
-} TOOLINFO_NEW;
-
-typedef struct tagNMTTDISPINFO_NEW
-{
-    NMHDR      hdr;
-    LPSTR      lpszText;
-    char       szText[80];
-    HINSTANCE  hinst;
-    UINT       uFlags;
-    LPARAM     lParam;
-} NMTTDISPINFO_NEW;
-
-typedef struct tagTOOLINFOW_NEW
-{
-    UINT       cbSize;
-    UINT       uFlags;
-    HWND       hwnd;
-    UINT_PTR   uId;
-    RECT       rect;
-    HINSTANCE  hinst;
-    LPWSTR     lpszText;
-    LPARAM     lParam;
-    void       *lpReserved;
-} TOOLINFOW_NEW;
-
-typedef struct tagNMTTDISPINFOW_NEW
-{
-    NMHDR      hdr;
-    LPWSTR     lpszText;
-    WCHAR      szText[80];
-    HINSTANCE  hinst;
-    UINT       uFlags;
-    LPARAM     lParam;
-} NMTTDISPINFOW_NEW;
-
-
-typedef HRESULT (WINAPI* DLLGETVERSIONPROC)(DLLVERSIONINFO *);
-# ifndef TTM_SETMAXTIPWIDTH
-#  define TTM_SETMAXTIPWIDTH	(WM_USER+24)
-# endif
-
-# ifndef TTF_DI_SETITEM
-#  define TTF_DI_SETITEM		0x8000
-# endif
-
-# ifndef TTN_GETDISPINFO
-#  define TTN_GETDISPINFO	(TTN_FIRST - 0)
-# endif
-
+static UINT_PTR	    beval_timer_id = 0;
+static DWORD	    last_user_activity = 0;
 #endif // defined(FEAT_BEVAL_GUI)
 
-#if defined(FEAT_TOOLBAR) || defined(FEAT_GUI_TABLINE)
-// Older MSVC compilers don't have LPNMTTDISPINFO[AW] thus we need to define
-// it here if LPNMTTDISPINFO isn't defined.
-// MingW doesn't define LPNMTTDISPINFO but typedefs it.  Thus we need to check
-// _MSC_VER.
-# if !defined(LPNMTTDISPINFO) && defined(_MSC_VER)
-typedef struct tagNMTTDISPINFOA {
-    NMHDR	hdr;
-    LPSTR	lpszText;
-    char	szText[80];
-    HINSTANCE	hinst;
-    UINT	uFlags;
-    LPARAM	lParam;
-} NMTTDISPINFOA, *LPNMTTDISPINFOA;
-#  define LPNMTTDISPINFO LPNMTTDISPINFOA
-
-typedef struct tagNMTTDISPINFOW {
-    NMHDR	hdr;
-    LPWSTR	lpszText;
-    WCHAR	szText[80];
-    HINSTANCE	hinst;
-    UINT	uFlags;
-    LPARAM	lParam;
-} NMTTDISPINFOW, *LPNMTTDISPINFOW;
-# endif
-#endif
-
-#ifndef TTN_GETDISPINFOW
-# define TTN_GETDISPINFOW	(TTN_FIRST - 10)
-#endif
 
 // Local variables:
 
@@ -4097,14 +4417,13 @@ static void get_dialog_font_metrics(void);
 
 static int dialog_default_button = -1;
 
-// Intellimouse support
-static int mouse_scroll_lines = 0;
-
-static int	s_usenewlook;	    // emulate W95/NT4 non-bold dialogs
 #ifdef FEAT_TOOLBAR
 static void initialise_toolbar(void);
+static void update_toolbar_size(void);
 static LRESULT CALLBACK toolbar_wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 static int get_toolbar_bitmap(vimmenu_T *menu);
+#else
+# define update_toolbar_size()
 #endif
 
 #ifdef FEAT_GUI_TABLINE
@@ -4127,7 +4446,6 @@ typedef HANDLE HIMC;
 # endif
 
 static HINSTANCE hLibImm = NULL;
-static LONG (WINAPI *pImmGetCompositionStringA)(HIMC, DWORD, LPVOID, DWORD);
 static LONG (WINAPI *pImmGetCompositionStringW)(HIMC, DWORD, LPVOID, DWORD);
 static HIMC (WINAPI *pImmGetContext)(HWND);
 static HIMC (WINAPI *pImmAssociateContext)(HWND, HIMC);
@@ -4141,7 +4459,6 @@ static BOOL (WINAPI *pImmGetConversionStatus)(HIMC, LPDWORD, LPDWORD);
 static BOOL (WINAPI *pImmSetConversionStatus)(HIMC, DWORD, DWORD);
 static void dyn_imm_load(void);
 #else
-# define pImmGetCompositionStringA ImmGetCompositionStringA
 # define pImmGetCompositionStringW ImmGetCompositionStringW
 # define pImmGetContext		  ImmGetContext
 # define pImmAssociateContext	  ImmAssociateContext
@@ -4215,46 +4532,45 @@ gui_mswin_get_menu_height(
 /*
  * Setup for the Intellimouse
  */
+    static long
+mouse_vertical_scroll_step(void)
+{
+    UINT val;
+    if (SystemParametersInfo(SPI_GETWHEELSCROLLLINES, 0, &val, 0))
+	return (val != WHEEL_PAGESCROLL) ? (long)val : -1;
+    return 3; // Safe default;
+}
+
+    static long
+mouse_horizontal_scroll_step(void)
+{
+    UINT val;
+    if (SystemParametersInfo(SPI_GETWHEELSCROLLCHARS, 0, &val, 0))
+	return (long)val;
+    return 3; // Safe default;
+}
+
     static void
 init_mouse_wheel(void)
 {
-
-#ifndef SPI_GETWHEELSCROLLLINES
-# define SPI_GETWHEELSCROLLLINES    104
-#endif
-#ifndef SPI_SETWHEELSCROLLLINES
-# define SPI_SETWHEELSCROLLLINES    105
-#endif
-
-#define VMOUSEZ_CLASSNAME  "MouseZ"		// hidden wheel window class
-#define VMOUSEZ_TITLE      "Magellan MSWHEEL"	// hidden wheel window title
-#define VMSH_MOUSEWHEEL    "MSWHEEL_ROLLMSG"
-#define VMSH_SCROLL_LINES  "MSH_SCROLL_LINES_MSG"
-
-    mouse_scroll_lines = 3;	// reasonable default
-
-    // if NT 4.0+ (or Win98) get scroll lines directly from system
-    SystemParametersInfo(SPI_GETWHEELSCROLLLINES, 0,
-	    &mouse_scroll_lines, 0);
+    // Get the default values for the horizontal and vertical scroll steps from
+    // the system.
+    mouse_set_vert_scroll_step(mouse_vertical_scroll_step());
+    mouse_set_hor_scroll_step(mouse_horizontal_scroll_step());
 }
 
-
 /*
- * Intellimouse wheel handler.
- * Treat a mouse wheel event as if it were a scroll request.
+ * Mouse scroll event handler.
  */
     static void
-_OnMouseWheel(
-    HWND hwnd,
-    short zDelta)
+_OnMouseWheel(HWND hwnd UNUSED, WPARAM wParam, LPARAM lParam, int horizontal)
 {
-    int i;
-    int size;
-    HWND hwndCtl;
-    win_T *wp;
-
-    if (mouse_scroll_lines == 0)
-	init_mouse_wheel();
+    int		button;
+    win_T	*wp;
+    int		modifiers = 0;
+    int		kbd_modifiers;
+    int		zDelta = GET_WHEEL_DELTA_WPARAM(wParam);
+    POINT	pt;
 
     wp = gui_mouse_window(FIND_POPUP);
 
@@ -4268,8 +4584,16 @@ _OnMouseWheel(
 	mouse_row = wp->w_winrow;
 	mouse_col = wp->w_wincol;
 	CLEAR_FIELD(cap);
-	cap.arg = zDelta < 0 ? MSCR_UP : MSCR_DOWN;
-	cap.cmdchar = zDelta < 0 ? K_MOUSEUP : K_MOUSEDOWN;
+	if (horizontal)
+	{
+	    cap.arg = zDelta < 0 ? MSCR_LEFT : MSCR_RIGHT;
+	    cap.cmdchar = zDelta < 0 ? K_MOUSELEFT : K_MOUSERIGHT;
+	}
+	else
+	{
+	    cap.arg = zDelta < 0 ? MSCR_UP : MSCR_DOWN;
+	    cap.cmdchar = zDelta < 0 ? K_MOUSEUP : K_MOUSEDOWN;
+	}
 	clear_oparg(&oa);
 	cap.oap = &oa;
 	nv_mousescroll(&cap);
@@ -4283,25 +4607,28 @@ _OnMouseWheel(
     if (wp == NULL || !p_scf)
 	wp = curwin;
 
-    if (wp->w_scrollbars[SBAR_RIGHT].id != 0)
-	hwndCtl = wp->w_scrollbars[SBAR_RIGHT].id;
-    else if (wp->w_scrollbars[SBAR_LEFT].id != 0)
-	hwndCtl = wp->w_scrollbars[SBAR_LEFT].id;
+    // Translate the scroll event into an event that Vim can process so that
+    // the user has a chance to map the scrollwheel buttons.
+    if (horizontal)
+	button = zDelta >= 0 ? MOUSE_6 : MOUSE_7;
     else
-	return;
-    size = wp->w_height;
+	button = zDelta >= 0 ? MOUSE_4 : MOUSE_5;
 
-    mch_disable_flush();
-    if (mouse_scroll_lines > 0
-	    && mouse_scroll_lines < (size > 2 ? size - 2 : 1))
-    {
-	for (i = mouse_scroll_lines; i > 0; --i)
-	    _OnScroll(hwnd, hwndCtl, zDelta >= 0 ? SB_LINEUP : SB_LINEDOWN, 0);
-    }
-    else
-	_OnScroll(hwnd, hwndCtl, zDelta >= 0 ? SB_PAGEUP : SB_PAGEDOWN, 0);
-    mch_enable_flush();
-    gui_may_flush();
+    kbd_modifiers = get_active_modifiers();
+
+    if ((kbd_modifiers & MOD_MASK_SHIFT) != 0)
+	modifiers |= MOUSE_SHIFT;
+    if ((kbd_modifiers & MOD_MASK_CTRL) != 0)
+	modifiers |= MOUSE_CTRL;
+    if ((kbd_modifiers & MOD_MASK_ALT) != 0)
+	modifiers |= MOUSE_ALT;
+
+    // The cursor position is relative to the upper-left corner of the screen.
+    pt.x = GET_X_LPARAM(lParam);
+    pt.y = GET_Y_LPARAM(lParam);
+    ScreenToClient(s_textArea, &pt);
+
+    gui_send_mouse_event(button, pt.x, pt.y, FALSE, modifiers);
 }
 
 #ifdef USE_SYSMENU_FONT
@@ -4344,6 +4671,7 @@ set_tabline_font(void)
     if (gui_w32_get_menu_font(&lfSysmenu) != OK)
 	return;
 
+    lfSysmenu.lfHeight = adjust_fontsize_by_dpi(lfSysmenu.lfHeight);
     font = CreateFontIndirectW(&lfSysmenu);
 
     SendMessage(s_tabhwnd, WM_SETFONT, (WPARAM)font, TRUE);
@@ -4366,21 +4694,30 @@ set_tabline_font(void)
      */
     gui.tabline_height = tm.tmHeight + tm.tmInternalLeading + 7;
 }
+#else
+# define set_tabline_font()
 #endif
 
 /*
  * Invoked when a setting was changed.
  */
     static LRESULT CALLBACK
-_OnSettingChange(UINT n)
+_OnSettingChange(UINT param)
 {
-    if (n == SPI_SETWHEELSCROLLLINES)
-	SystemParametersInfo(SPI_GETWHEELSCROLLLINES, 0,
-		&mouse_scroll_lines, 0);
-#if defined(FEAT_GUI_TABLINE) && defined(USE_SYSMENU_FONT)
-    if (n == SPI_SETNONCLIENTMETRICS)
-	set_tabline_font();
-#endif
+    switch (param)
+    {
+	case SPI_SETWHEELSCROLLLINES:
+	    mouse_set_vert_scroll_step(mouse_vertical_scroll_step());
+	    break;
+	case SPI_SETWHEELSCROLLCHARS:
+	    mouse_set_hor_scroll_step(mouse_horizontal_scroll_step());
+	    break;
+	case SPI_SETNONCLIENTMETRICS:
+	    set_tabline_font();
+	    break;
+	default:
+	    break;
+    }
     return 0;
 }
 
@@ -4403,9 +4740,50 @@ _OnWindowPosChanged(
 	netbeans_frame_moved(x, y);
     }
     // Allow to send WM_SIZE and WM_MOVE
-    FORWARD_WM_WINDOWPOSCHANGED(hwnd, lpwpos, MyWindowProc);
+    FORWARD_WM_WINDOWPOSCHANGED(hwnd, lpwpos, DefWindowProcW);
 }
 #endif
+
+
+static HWND hwndTip = NULL;
+
+    static void
+show_sizing_tip(int cols, int rows)
+{
+    TOOLINFOA ti;
+    char buf[32];
+
+    ti.cbSize = sizeof(ti);
+    ti.hwnd = s_hwnd;
+    ti.uId = (UINT_PTR)s_hwnd;
+    ti.uFlags = TTF_SUBCLASS | TTF_IDISHWND;
+    ti.lpszText = buf;
+    sprintf(buf, "%dx%d", cols, rows);
+    if (hwndTip == NULL)
+    {
+	hwndTip = CreateWindowExA(0, TOOLTIPS_CLASSA, NULL,
+		WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+		CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+		s_hwnd, NULL, GetModuleHandle(NULL), NULL);
+	SendMessage(hwndTip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+	SendMessage(hwndTip, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti);
+    }
+    else
+    {
+	SendMessage(hwndTip, TTM_UPDATETIPTEXT, 0, (LPARAM)&ti);
+    }
+    SendMessage(hwndTip, TTM_POPUP, 0, 0);
+}
+
+    static void
+destroy_sizing_tip(void)
+{
+    if (hwndTip == NULL)
+	return;
+
+    DestroyWindow(hwndTip);
+    hwndTip = NULL;
+}
 
     static int
 _DuringSizing(
@@ -4415,10 +4793,11 @@ _DuringSizing(
     int	    w, h;
     int	    valid_w, valid_h;
     int	    w_offset, h_offset;
+    int	    cols, rows;
 
     w = lprc->right - lprc->left;
     h = lprc->bottom - lprc->top;
-    gui_mswin_get_valid_dimensions(w, h, &valid_w, &valid_h);
+    gui_mswin_get_valid_dimensions(w, h, &valid_w, &valid_h, &cols, &rows);
     w_offset = w - valid_w;
     h_offset = h - valid_h;
 
@@ -4435,9 +4814,300 @@ _DuringSizing(
     else if (fwSide == WMSZ_BOTTOM || fwSide == WMSZ_BOTTOMLEFT
 			    || fwSide == WMSZ_BOTTOMRIGHT)
 	lprc->bottom -= h_offset;
+
+    show_sizing_tip(cols, rows);
     return TRUE;
 }
 
+#ifdef FEAT_GUI_TABLINE
+    static void
+_OnRButtonUp(HWND hwnd, int x, int y, UINT keyFlags)
+{
+    if (gui_mch_showing_tabline())
+    {
+	POINT pt;
+	RECT rect;
+
+	/*
+	 * If the cursor is on the tabline, display the tab menu
+	 */
+	GetCursorPos(&pt);
+	GetWindowRect(s_textArea, &rect);
+	if (pt.y < rect.top)
+	{
+	    show_tabline_popup_menu();
+	    return;
+	}
+    }
+    FORWARD_WM_RBUTTONUP(hwnd, x, y, keyFlags, DefWindowProcW);
+}
+
+    static void
+_OnLButtonDown(HWND hwnd, BOOL fDoubleClick, int x, int y, UINT keyFlags)
+{
+    /*
+     * If the user double clicked the tabline, create a new tab
+     */
+    if (gui_mch_showing_tabline())
+    {
+	POINT pt;
+	RECT rect;
+
+	GetCursorPos(&pt);
+	GetWindowRect(s_textArea, &rect);
+	if (pt.y < rect.top)
+	    send_tabline_menu_event(0, TABLINE_MENU_NEW);
+    }
+    FORWARD_WM_LBUTTONDOWN(hwnd, fDoubleClick, x, y, keyFlags, DefWindowProcW);
+}
+#endif
+
+    static UINT
+_OnNCHitTest(HWND hwnd, int xPos, int yPos)
+{
+    UINT	result;
+    int		x, y;
+
+    result = FORWARD_WM_NCHITTEST(hwnd, xPos, yPos, DefWindowProcW);
+    if (result != HTCLIENT)
+	return result;
+
+#ifdef FEAT_GUI_TABLINE
+    if (gui_mch_showing_tabline())
+    {
+	RECT rct;
+
+	// If the cursor is on the GUI tabline, don't process this event
+	GetWindowRect(s_textArea, &rct);
+	if (yPos < rct.top)
+	    return result;
+    }
+#endif
+    (void)gui_mch_get_winpos(&x, &y);
+    xPos -= x;
+
+    if (xPos < 48) // <VN> TODO should use system metric?
+	return HTBOTTOMLEFT;
+    else
+	return HTBOTTOMRIGHT;
+}
+
+#if defined(FEAT_TOOLBAR) || defined(FEAT_GUI_TABLINE)
+    static LRESULT
+_OnNotify(HWND hwnd, UINT id, NMHDR *hdr)
+{
+    switch (hdr->code)
+    {
+	case TTN_GETDISPINFOW:
+	case TTN_GETDISPINFO:
+	    {
+		char_u		*str = NULL;
+		static void	*tt_text = NULL;
+
+		VIM_CLEAR(tt_text);
+
+# ifdef FEAT_GUI_TABLINE
+		if (gui_mch_showing_tabline()
+			&& hdr->hwndFrom == TabCtrl_GetToolTips(s_tabhwnd))
+		{
+		    POINT	pt;
+		    /*
+		     * Mouse is over the GUI tabline. Display the
+		     * tooltip for the tab under the cursor
+		     *
+		     * Get the cursor position within the tab control
+		     */
+		    GetCursorPos(&pt);
+		    if (ScreenToClient(s_tabhwnd, &pt) != 0)
+		    {
+			TCHITTESTINFO htinfo;
+			int idx;
+
+			/*
+			 * Get the tab under the cursor
+			 */
+			htinfo.pt.x = pt.x;
+			htinfo.pt.y = pt.y;
+			idx = TabCtrl_HitTest(s_tabhwnd, &htinfo);
+			if (idx != -1)
+			{
+			    tabpage_T *tp;
+
+			    tp = find_tabpage(idx + 1);
+			    if (tp != NULL)
+			    {
+				get_tabline_label(tp, TRUE);
+				str = NameBuff;
+			    }
+			}
+		    }
+		}
+# endif
+# ifdef FEAT_TOOLBAR
+#  ifdef FEAT_GUI_TABLINE
+		else
+#  endif
+		{
+		    UINT	idButton;
+		    vimmenu_T	*pMenu;
+
+		    idButton = (UINT) hdr->idFrom;
+		    pMenu = gui_mswin_find_menu(root_menu, idButton);
+		    if (pMenu)
+			str = pMenu->strings[MENU_INDEX_TIP];
+		}
+# endif
+		if (str == NULL)
+		    break;
+
+		// Set the maximum width, this also enables using \n for
+		// line break.
+		SendMessage(hdr->hwndFrom, TTM_SETMAXTIPWIDTH, 0, 500);
+
+		if (hdr->code == TTN_GETDISPINFOW)
+		{
+		    LPNMTTDISPINFOW	lpdi = (LPNMTTDISPINFOW)hdr;
+
+		    tt_text = enc_to_utf16(str, NULL);
+		    lpdi->lpszText = tt_text;
+		    // can't show tooltip if failed
+		}
+		else
+		{
+		    LPNMTTDISPINFO	lpdi = (LPNMTTDISPINFO)hdr;
+
+		    if (STRLEN(str) < sizeof(lpdi->szText)
+			    || ((tt_text = vim_strsave(str)) == NULL))
+			vim_strncpy((char_u *)lpdi->szText, str,
+				sizeof(lpdi->szText) - 1);
+		    else
+			lpdi->lpszText = tt_text;
+		}
+	    }
+	    break;
+
+# ifdef FEAT_GUI_TABLINE
+	case TCN_SELCHANGE:
+	    if (gui_mch_showing_tabline() && (hdr->hwndFrom == s_tabhwnd))
+	    {
+		send_tabline_event(TabCtrl_GetCurSel(s_tabhwnd) + 1);
+		return 0L;
+	    }
+	    break;
+
+	case NM_RCLICK:
+	    if (gui_mch_showing_tabline() && (hdr->hwndFrom == s_tabhwnd))
+	    {
+		show_tabline_popup_menu();
+		return 0L;
+	    }
+	    break;
+# endif
+
+	default:
+	    break;
+    }
+    return DefWindowProcW(hwnd, WM_NOTIFY, (WPARAM)id, (LPARAM)hdr);
+}
+#endif
+
+#if defined(MENUHINTS) && defined(FEAT_MENU)
+    static LRESULT
+_OnMenuSelect(HWND hwnd, WPARAM wParam, LPARAM lParam)
+{
+    if (((UINT) HIWORD(wParam)
+		& (0xffff ^ (MF_MOUSESELECT + MF_BITMAP + MF_POPUP)))
+	    == MF_HILITE
+	    && (State & MODE_CMDLINE) == 0)
+    {
+	UINT	    idButton;
+	vimmenu_T   *pMenu;
+	static int  did_menu_tip = FALSE;
+
+	if (did_menu_tip)
+	{
+	    msg_clr_cmdline();
+	    setcursor();
+	    out_flush();
+	    did_menu_tip = FALSE;
+	}
+
+	idButton = (UINT)LOWORD(wParam);
+	pMenu = gui_mswin_find_menu(root_menu, idButton);
+	if (pMenu != NULL && pMenu->strings[MENU_INDEX_TIP] != 0
+		&& GetMenuState(s_menuBar, pMenu->id, MF_BYCOMMAND) != -1)
+	{
+	    ++msg_hist_off;
+	    msg((char *)pMenu->strings[MENU_INDEX_TIP]);
+	    --msg_hist_off;
+	    setcursor();
+	    out_flush();
+	    did_menu_tip = TRUE;
+	}
+	return 0L;
+    }
+    return DefWindowProcW(hwnd, WM_MENUSELECT, wParam, lParam);
+}
+#endif
+
+    static BOOL
+_OnGetDpiScaledSize(HWND hwnd, UINT dpi, SIZE *size)
+{
+    int		old_width, old_height;
+    int		new_width, new_height;
+    LOGFONTW	lf;
+    HFONT	font;
+
+    //TRACE("DPI: %d, SIZE=(%d,%d), s_dpi: %d", dpi, size->cx, size->cy, s_dpi);
+
+    // Calculate new approximate size.
+    GetFontSize(gui.norm_font, &old_width, &old_height);    // Current size
+    GetObjectW((HFONT)gui.norm_font, sizeof(lf), &lf);
+    lf.lfHeight = lf.lfHeight * (int)dpi / s_dpi;
+    font = CreateFontIndirectW(&lf);
+    if (font)
+    {
+	GetFontSize((GuiFont)font, &new_width, &new_height);	// New size
+	DeleteFont(font);
+    }
+    else
+    {
+	new_width = old_width;
+	new_height = old_height;
+    }
+    size->cx = size->cx * new_width / old_width;
+    size->cy = size->cy * new_height / old_height;
+    //TRACE("New approx. SIZE=(%d,%d)", size->cx, size->cy);
+
+    return TRUE;
+}
+
+    static LRESULT
+_OnDpiChanged(HWND hwnd, UINT xdpi UNUSED, UINT ydpi, RECT *rc)
+{
+    s_dpi = ydpi;
+    s_in_dpichanged = TRUE;
+    //TRACE("DPI: %d", ydpi);
+
+    s_suggested_rect = *rc;
+    //TRACE("Suggested pos&size: %d,%d %d,%d", rc->left, rc->top,
+    //		rc->right - rc->left, rc->bottom - rc->top);
+
+    update_scrollbar_size();
+    update_toolbar_size();
+    set_tabline_font();
+
+    gui_init_font(*p_guifont == NUL ? hl_get_font_name() : p_guifont, FALSE);
+    gui_get_wide_font();
+    gui_mswin_get_menu_height(FALSE);
+#ifdef FEAT_MBYTE_IME
+    im_set_position(gui.row, gui.col);
+#endif
+    InvalidateRect(hwnd, NULL, TRUE);
+
+    s_in_dpichanged = FALSE;
+    return 0L;
+}
 
 
     static LRESULT CALLBACK
@@ -4447,10 +5117,8 @@ _WndProc(
     WPARAM wParam,
     LPARAM lParam)
 {
-    /*
-    TRACE("WndProc: hwnd = %08x, msg = %x, wParam = %x, lParam = %x\n",
-	  hwnd, uMsg, wParam, lParam);
-    */
+    // ch_log(NULL, "WndProc: hwnd = %08x, msg = %x, wParam = %x, lParam = %x",
+	    // hwnd, uMsg, wParam, lParam);
 
     HandleMouseHide(uMsg, lParam);
 
@@ -4484,46 +5152,11 @@ _WndProc(
 #ifdef FEAT_NETBEANS_INTG
 	HANDLE_MSG(hwnd, WM_WINDOWPOSCHANGED, _OnWindowPosChanged);
 #endif
-
 #ifdef FEAT_GUI_TABLINE
-	case WM_RBUTTONUP:
-	{
-	    if (gui_mch_showing_tabline())
-	    {
-		POINT pt;
-		RECT rect;
-
-		/*
-		 * If the cursor is on the tabline, display the tab menu
-		 */
-		GetCursorPos((LPPOINT)&pt);
-		GetWindowRect(s_textArea, &rect);
-		if (pt.y < rect.top)
-		{
-		    show_tabline_popup_menu();
-		    return 0L;
-		}
-	    }
-	    return MyWindowProc(hwnd, uMsg, wParam, lParam);
-	}
-	case WM_LBUTTONDBLCLK:
-	{
-	    /*
-	     * If the user double clicked the tabline, create a new tab
-	     */
-	    if (gui_mch_showing_tabline())
-	    {
-		POINT pt;
-		RECT rect;
-
-		GetCursorPos((LPPOINT)&pt);
-		GetWindowRect(s_textArea, &rect);
-		if (pt.y < rect.top)
-		    send_tabline_menu_event(0, TABLINE_MENU_NEW);
-	    }
-	    return MyWindowProc(hwnd, uMsg, wParam, lParam);
-	}
+	HANDLE_MSG(hwnd, WM_RBUTTONUP,	_OnRButtonUp);
+	HANDLE_MSG(hwnd, WM_LBUTTONDBLCLK,  _OnLButtonDown);
 #endif
+	HANDLE_MSG(hwnd, WM_NCHITTEST,	_OnNCHitTest);
 
     case WM_QUERYENDSESSION:	// System wants to go down.
 	gui_shell_closed();	// Will exit when no changed buffers.
@@ -4561,7 +5194,7 @@ _WndProc(
 	}
 #ifdef FEAT_MENU
 	else
-	    return MyWindowProc(hwnd, uMsg, wParam, lParam);
+	    return DefWindowProcW(hwnd, uMsg, wParam, lParam);
 #endif
 
     case WM_SYSKEYUP:
@@ -4570,16 +5203,21 @@ _WndProc(
 	// that.  But that caused problems when menu is disabled and using
 	// Alt-Tab-Esc: get into a strange state where no mouse-moved events
 	// are received, mouse pointer remains hidden.
-	return MyWindowProc(hwnd, uMsg, wParam, lParam);
+	return DefWindowProcW(hwnd, uMsg, wParam, lParam);
 #else
 	return 0L;
 #endif
+
+    case WM_EXITSIZEMOVE:
+	destroy_sizing_tip();
+	break;
 
     case WM_SIZING:	// HANDLE_MSG doesn't seem to handle this one
 	return _DuringSizing((UINT)wParam, (LPRECT)lParam);
 
     case WM_MOUSEWHEEL:
-	_OnMouseWheel(hwnd, HIWORD(wParam));
+    case WM_MOUSEHWHEEL:
+	_OnMouseWheel(hwnd, wParam, lParam, uMsg == WM_MOUSEHWHEEL);
 	return 0L;
 
 	// Notification for change in SystemParametersInfo()
@@ -4588,222 +5226,40 @@ _WndProc(
 
 #if defined(FEAT_TOOLBAR) || defined(FEAT_GUI_TABLINE)
     case WM_NOTIFY:
-	switch (((LPNMHDR) lParam)->code)
-	{
-	    case TTN_GETDISPINFOW:
-	    case TTN_GETDISPINFO:
-		{
-		    LPNMHDR		hdr = (LPNMHDR)lParam;
-		    char_u		*str = NULL;
-		    static void		*tt_text = NULL;
-
-		    VIM_CLEAR(tt_text);
-
-# ifdef FEAT_GUI_TABLINE
-		    if (gui_mch_showing_tabline()
-			   && hdr->hwndFrom == TabCtrl_GetToolTips(s_tabhwnd))
-		    {
-			POINT		pt;
-			/*
-			 * Mouse is over the GUI tabline. Display the
-			 * tooltip for the tab under the cursor
-			 *
-			 * Get the cursor position within the tab control
-			 */
-			GetCursorPos(&pt);
-			if (ScreenToClient(s_tabhwnd, &pt) != 0)
-			{
-			    TCHITTESTINFO htinfo;
-			    int idx;
-
-			    /*
-			     * Get the tab under the cursor
-			     */
-			    htinfo.pt.x = pt.x;
-			    htinfo.pt.y = pt.y;
-			    idx = TabCtrl_HitTest(s_tabhwnd, &htinfo);
-			    if (idx != -1)
-			    {
-				tabpage_T *tp;
-
-				tp = find_tabpage(idx + 1);
-				if (tp != NULL)
-				{
-				    get_tabline_label(tp, TRUE);
-				    str = NameBuff;
-				}
-			    }
-			}
-		    }
-# endif
-# ifdef FEAT_TOOLBAR
-#  ifdef FEAT_GUI_TABLINE
-		    else
-#  endif
-		    {
-			UINT		idButton;
-			vimmenu_T	*pMenu;
-
-			idButton = (UINT) hdr->idFrom;
-			pMenu = gui_mswin_find_menu(root_menu, idButton);
-			if (pMenu)
-			    str = pMenu->strings[MENU_INDEX_TIP];
-		    }
-# endif
-		    if (str != NULL)
-		    {
-			if (hdr->code == TTN_GETDISPINFOW)
-			{
-			    LPNMTTDISPINFOW	lpdi = (LPNMTTDISPINFOW)lParam;
-
-			    // Set the maximum width, this also enables using
-			    // \n for line break.
-			    SendMessage(lpdi->hdr.hwndFrom, TTM_SETMAXTIPWIDTH,
-								      0, 500);
-
-			    tt_text = enc_to_utf16(str, NULL);
-			    lpdi->lpszText = tt_text;
-			    // can't show tooltip if failed
-			}
-			else
-			{
-			    LPNMTTDISPINFO	lpdi = (LPNMTTDISPINFO)lParam;
-
-			    // Set the maximum width, this also enables using
-			    // \n for line break.
-			    SendMessage(lpdi->hdr.hwndFrom, TTM_SETMAXTIPWIDTH,
-								      0, 500);
-
-			    if (STRLEN(str) < sizeof(lpdi->szText)
-				    || ((tt_text = vim_strsave(str)) == NULL))
-				vim_strncpy((char_u *)lpdi->szText, str,
-						sizeof(lpdi->szText) - 1);
-			    else
-				lpdi->lpszText = tt_text;
-			}
-		    }
-		}
-		break;
-# ifdef FEAT_GUI_TABLINE
-	    case TCN_SELCHANGE:
-		if (gui_mch_showing_tabline()
-				  && ((LPNMHDR)lParam)->hwndFrom == s_tabhwnd)
-		{
-		    send_tabline_event(TabCtrl_GetCurSel(s_tabhwnd) + 1);
-		    return 0L;
-		}
-		break;
-
-	    case NM_RCLICK:
-		if (gui_mch_showing_tabline()
-			&& ((LPNMHDR)lParam)->hwndFrom == s_tabhwnd)
-		{
-		    show_tabline_popup_menu();
-		    return 0L;
-		}
-		break;
-# endif
-	    default:
-# ifdef FEAT_GUI_TABLINE
-		if (gui_mch_showing_tabline()
-				  && ((LPNMHDR)lParam)->hwndFrom == s_tabhwnd)
-		    return MyWindowProc(hwnd, uMsg, wParam, lParam);
-# endif
-		break;
-	}
-	break;
+	return _OnNotify(hwnd, (UINT)wParam, (NMHDR*)lParam);
 #endif
+
 #if defined(MENUHINTS) && defined(FEAT_MENU)
     case WM_MENUSELECT:
-	if (((UINT) HIWORD(wParam)
-		    & (0xffff ^ (MF_MOUSESELECT + MF_BITMAP + MF_POPUP)))
-		== MF_HILITE
-		&& (State & CMDLINE) == 0)
-	{
-	    UINT	idButton;
-	    vimmenu_T	*pMenu;
-	    static int	did_menu_tip = FALSE;
-
-	    if (did_menu_tip)
-	    {
-		msg_clr_cmdline();
-		setcursor();
-		out_flush();
-		did_menu_tip = FALSE;
-	    }
-
-	    idButton = (UINT)LOWORD(wParam);
-	    pMenu = gui_mswin_find_menu(root_menu, idButton);
-	    if (pMenu != NULL && pMenu->strings[MENU_INDEX_TIP] != 0
-		    && GetMenuState(s_menuBar, pMenu->id, MF_BYCOMMAND) != -1)
-	    {
-		++msg_hist_off;
-		msg((char *)pMenu->strings[MENU_INDEX_TIP]);
-		--msg_hist_off;
-		setcursor();
-		out_flush();
-		did_menu_tip = TRUE;
-	    }
-	    return 0L;
-	}
-	break;
+	return _OnMenuSelect(hwnd, wParam, lParam);
 #endif
-    case WM_NCHITTEST:
-	{
-	    LRESULT	result;
-	    int		x, y;
-	    int		xPos = GET_X_LPARAM(lParam);
-
-	    result = MyWindowProc(hwnd, uMsg, wParam, lParam);
-	    if (result == HTCLIENT)
-	    {
-#ifdef FEAT_GUI_TABLINE
-		if (gui_mch_showing_tabline())
-		{
-		    int  yPos = GET_Y_LPARAM(lParam);
-		    RECT rct;
-
-		    // If the cursor is on the GUI tabline, don't process this
-		    // event
-		    GetWindowRect(s_textArea, &rct);
-		    if (yPos < rct.top)
-			return result;
-		}
-#endif
-		(void)gui_mch_get_winpos(&x, &y);
-		xPos -= x;
-
-		if (xPos < 48) // <VN> TODO should use system metric?
-		    return HTBOTTOMLEFT;
-		else
-		    return HTBOTTOMRIGHT;
-	    }
-	    else
-		return result;
-	}
-	// break; notreached
 
 #ifdef FEAT_MBYTE_IME
     case WM_IME_NOTIFY:
 	if (!_OnImeNotify(hwnd, (DWORD)wParam, (DWORD)lParam))
-	    return MyWindowProc(hwnd, uMsg, wParam, lParam);
+	    return DefWindowProcW(hwnd, uMsg, wParam, lParam);
 	return 1L;
 
     case WM_IME_COMPOSITION:
 	if (!_OnImeComposition(hwnd, wParam, lParam))
-	    return MyWindowProc(hwnd, uMsg, wParam, lParam);
+	    return DefWindowProcW(hwnd, uMsg, wParam, lParam);
 	return 1L;
 #endif
+    case WM_GETDPISCALEDSIZE:
+	return _OnGetDpiScaledSize(hwnd, (UINT)wParam, (SIZE *)lParam);
+    case WM_DPICHANGED:
+	return _OnDpiChanged(hwnd, (UINT)LOWORD(wParam), (UINT)HIWORD(wParam),
+		(RECT*)lParam);
 
     default:
 #ifdef MSWIN_FIND_REPLACE
 	if (uMsg == s_findrep_msg && s_findrep_msg != 0)
 	    _OnFindRepl();
 #endif
-	return MyWindowProc(hwnd, uMsg, wParam, lParam);
+	break;
     }
 
-    return DefWindowProc(hwnd, uMsg, wParam, lParam);
+    return DefWindowProcW(hwnd, uMsg, wParam, lParam);
 }
 
 /*
@@ -4843,7 +5299,7 @@ gui_mch_set_parent(char *title)
     EnumWindows(FindWindowTitle, (LPARAM)title);
     if (vim_parent_hwnd == NULL)
     {
-	semsg(_("E671: Cannot find window title \"%s\""), title);
+	semsg(_(e_cannot_find_window_title_str), title);
 	mch_exit(2);
     }
 }
@@ -4860,8 +5316,7 @@ ole_error(char *arg)
 
     // Can't use emsg() here, we have not finished initialisation yet.
     vim_snprintf(buf, IOSIZE,
-	    _("E243: Argument not supported: \"-%s\"; Use the OLE version."),
-	    arg);
+			 _(e_argument_not_supported_str_use_ole_version), arg);
     mch_errmsg(buf);
 }
 #endif
@@ -4870,7 +5325,7 @@ ole_error(char *arg)
     static char *
 gvim_error(void)
 {
-    char *msg = _("E988: GUI cannot be used. Cannot execute gvim.exe.");
+    char *msg = _(e_gui_cannot_be_used_cannot_execute_gvim_exe);
 
     if (starting)
     {
@@ -5004,7 +5459,7 @@ error:
 /*
  * Parse the GUI related command-line arguments.  Any arguments used are
  * deleted from argv, and *argc is decremented accordingly.  This is called
- * when vim is started, whether or not the GUI has been started.
+ * when Vim is started, whether or not the GUI has been started.
  */
     void
 gui_mch_prepare(int *argc, char **argv)
@@ -5067,6 +5522,9 @@ gui_mch_prepare(int *argc, char **argv)
     }
 
 #ifdef FEAT_OLE
+# ifdef VIMDLL
+    if (mch_is_gui_executable())
+# endif
     {
 	int	bDoRestart = FALSE;
 
@@ -5095,6 +5553,49 @@ gui_mch_prepare(int *argc, char **argv)
 #endif
 }
 
+    static void
+load_dpi_func(void)
+{
+    HMODULE	hUser32;
+
+    hUser32 = GetModuleHandle("user32.dll");
+    if (hUser32 == NULL)
+	goto fail;
+
+    pGetDpiForSystem = (UINT (WINAPI *)(void))GetProcAddress(hUser32, "GetDpiForSystem");
+    pGetDpiForWindow = (UINT (WINAPI *)(HWND))GetProcAddress(hUser32, "GetDpiForWindow");
+    pGetSystemMetricsForDpi = (int (WINAPI *)(int, UINT))GetProcAddress(hUser32, "GetSystemMetricsForDpi");
+    //pGetWindowDpiAwarenessContext = (void*)GetProcAddress(hUser32, "GetWindowDpiAwarenessContext");
+    pSetThreadDpiAwarenessContext = (DPI_AWARENESS_CONTEXT (WINAPI *)(DPI_AWARENESS_CONTEXT))GetProcAddress(hUser32, "SetThreadDpiAwarenessContext");
+    pGetAwarenessFromDpiAwarenessContext = (DPI_AWARENESS (WINAPI *)(DPI_AWARENESS_CONTEXT))GetProcAddress(hUser32, "GetAwarenessFromDpiAwarenessContext");
+
+    if (pSetThreadDpiAwarenessContext != NULL)
+    {
+	DPI_AWARENESS_CONTEXT oldctx = pSetThreadDpiAwarenessContext(
+		DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+	if (oldctx != NULL)
+	{
+	    TRACE("DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 enabled");
+	    s_process_dpi_aware = pGetAwarenessFromDpiAwarenessContext(oldctx);
+#ifdef DEBUG
+	    if (s_process_dpi_aware == DPI_AWARENESS_UNAWARE)
+	    {
+		TRACE("WARNING: PerMonitorV2 is not enabled in the process level for some reasons. IME window may not shown correctly.");
+	    }
+#endif
+	    return;
+	}
+    }
+
+fail:
+    // Disable PerMonitorV2 APIs.
+    pGetDpiForSystem = vimGetDpiForSystem;
+    pGetDpiForWindow = NULL;
+    pGetSystemMetricsForDpi = stubGetSystemMetricsForDpi;
+    pSetThreadDpiAwarenessContext = NULL;
+    pGetAwarenessFromDpiAwarenessContext = NULL;
+}
+
 /*
  * Initialise the GUI.	Create all the windows, set up all the call-backs
  * etc.
@@ -5105,9 +5606,6 @@ gui_mch_init(void)
     const WCHAR szVimWndClassW[] = VIM_CLASSW;
     const WCHAR szTextAreaClassW[] = L"VimTextArea";
     WNDCLASSW wndclassw;
-#ifdef GLOBAL_IME
-    ATOM	atom;
-#endif
 
     // Return here if the window was already opened (happens when
     // gui_mch_dialog() is called early).
@@ -5121,12 +5619,18 @@ gui_mch_init(void)
     s_htearbitmap = LoadBitmap(g_hinst, "IDB_TEAROFF");
 #endif
 
-    gui.scrollbar_width = GetSystemMetrics(SM_CXVSCROLL);
-    gui.scrollbar_height = GetSystemMetrics(SM_CYHSCROLL);
+    load_dpi_func();
+
+    s_dpi = pGetDpiForSystem();
+    update_scrollbar_size();
+
 #ifdef FEAT_MENU
     gui.menu_height = 0;	// Windows takes care of this
 #endif
     gui.border_width = 0;
+#ifdef FEAT_TOOLBAR
+    gui.toolbar_height = TOOLBAR_BUTTON_HEIGHT + TOOLBAR_BORDER_HEIGHT;
+#endif
 
     s_brush = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
 
@@ -5145,11 +5649,7 @@ gui_mch_init(void)
 	wndclassw.lpszMenuName = NULL;
 	wndclassw.lpszClassName = szVimWndClassW;
 
-	if ((
-#ifdef GLOBAL_IME
-		    atom =
-#endif
-		    RegisterClassW(&wndclassw)) == 0)
+	if (RegisterClassW(&wndclassw) == 0)
 	    return FAIL;
     }
 
@@ -5182,7 +5682,7 @@ gui_mch_init(void)
 #endif
 	if (s_hwnd == NULL)
 	{
-	    emsg(_("E672: Unable to open window inside MDI application"));
+	    emsg(_(e_unable_to_open_window_inside_mdi_application));
 	    mch_exit(2);
 	}
     }
@@ -5215,9 +5715,13 @@ gui_mch_init(void)
     if (s_hwnd == NULL)
 	return FAIL;
 
-#ifdef GLOBAL_IME
-    global_ime_init(atom, s_hwnd);
-#endif
+    if (pGetDpiForWindow != NULL)
+    {
+	s_dpi = pGetDpiForWindow(s_hwnd);
+	update_scrollbar_size();
+	//TRACE("System DPI: %d, DPI: %d", pGetDpiForSystem(), s_dpi);
+    }
+
 #if defined(FEAT_MBYTE_IME) && defined(DYNAMIC_IME)
     dyn_imm_load();
 #endif
@@ -5270,7 +5774,7 @@ gui_mch_init(void)
     DragAcceptFiles(s_hwnd, TRUE);
 
     // Do we need to bother with this?
-    // m_fMouseAvail = GetSystemMetrics(SM_MOUSEPRESENT);
+    // m_fMouseAvail = pGetSystemMetricsForDpi(SM_MOUSEPRESENT, s_dpi);
 
     // Get background/foreground colors from the system
     gui_mch_def_colors();
@@ -5334,12 +5838,6 @@ gui_mch_init(void)
 #endif
 
 #ifdef FEAT_EVAL
-# if !defined(_MSC_VER) || (_MSC_VER < 1400)
-// Define HandleToLong for old MS and non-MS compilers if not defined.
-#  ifndef HandleToLong
-#   define HandleToLong(h) ((long)(intptr_t)(h))
-#  endif
-# endif
     // set the v:windowid variable
     set_vim_var_nr(VV_WINDOWID, HandleToLong(s_hwnd));
 #endif
@@ -5395,79 +5893,77 @@ gui_mch_set_shellsize(
 	int direction)
 {
     RECT	workarea_rect;
+    RECT	window_rect;
     int		win_width, win_height;
-    WINDOWPLACEMENT wndpl;
 
     // Try to keep window completely on screen.
     // Get position of the screen work area.  This is the part that is not
     // used by the taskbar or appbars.
     get_work_area(&workarea_rect);
 
-    // Get current position of our window.  Note that the .left and .top are
-    // relative to the work area.
-    wndpl.length = sizeof(WINDOWPLACEMENT);
-    GetWindowPlacement(s_hwnd, &wndpl);
-
     // Resizing a maximized window looks very strange, unzoom it first.
     // But don't do it when still starting up, it may have been requested in
     // the shortcut.
-    if (wndpl.showCmd == SW_SHOWMAXIMIZED && starting == 0)
-    {
+    if (IsZoomed(s_hwnd) && starting == 0)
 	ShowWindow(s_hwnd, SW_SHOWNORMAL);
-	// Need to get the settings of the normal window.
-	GetWindowPlacement(s_hwnd, &wndpl);
-    }
+
+    if (s_in_dpichanged)
+	// Use the suggested position when in WM_DPICHANGED.
+	window_rect = s_suggested_rect;
+    else
+	// Use current position.
+	GetWindowRect(s_hwnd, &window_rect);
 
     // compute the size of the outside of the window
-    win_width = width + (GetSystemMetrics(SM_CXFRAME) +
-			 GetSystemMetrics(SM_CXPADDEDBORDER)) * 2;
-    win_height = height + (GetSystemMetrics(SM_CYFRAME) +
-			   GetSystemMetrics(SM_CXPADDEDBORDER)) * 2
-			+ GetSystemMetrics(SM_CYCAPTION)
-#ifdef FEAT_MENU
-			+ gui_mswin_get_menu_height(FALSE)
-#endif
-			;
+    win_width = width + (pGetSystemMetricsForDpi(SM_CXFRAME, s_dpi) +
+		     pGetSystemMetricsForDpi(SM_CXPADDEDBORDER, s_dpi)) * 2;
+    win_height = height + (pGetSystemMetricsForDpi(SM_CYFRAME, s_dpi) +
+		       pGetSystemMetricsForDpi(SM_CXPADDEDBORDER, s_dpi)) * 2
+			+ pGetSystemMetricsForDpi(SM_CYCAPTION, s_dpi)
+			+ gui_mswin_get_menu_height(FALSE);
 
     // The following should take care of keeping Vim on the same monitor, no
     // matter if the secondary monitor is left or right of the primary
     // monitor.
-    wndpl.rcNormalPosition.right = wndpl.rcNormalPosition.left + win_width;
-    wndpl.rcNormalPosition.bottom = wndpl.rcNormalPosition.top + win_height;
+    window_rect.right = window_rect.left + win_width;
+    window_rect.bottom = window_rect.top + win_height;
 
     // If the window is going off the screen, move it on to the screen.
-    if ((direction & RESIZE_HOR)
-	    && wndpl.rcNormalPosition.right > workarea_rect.right)
-	OffsetRect(&wndpl.rcNormalPosition,
-		workarea_rect.right - wndpl.rcNormalPosition.right, 0);
+    // Don't adjust the position when in WM_DPICHANGED.
+    if (!s_in_dpichanged)
+    {
+	if ((direction & RESIZE_HOR)
+		&& window_rect.right > workarea_rect.right)
+	    OffsetRect(&window_rect,
+		    workarea_rect.right - window_rect.right, 0);
 
-    if ((direction & RESIZE_HOR)
-	    && wndpl.rcNormalPosition.left < workarea_rect.left)
-	OffsetRect(&wndpl.rcNormalPosition,
-		workarea_rect.left - wndpl.rcNormalPosition.left, 0);
+	if ((direction & RESIZE_HOR)
+		&& window_rect.left < workarea_rect.left)
+	    OffsetRect(&window_rect,
+		    workarea_rect.left - window_rect.left, 0);
 
-    if ((direction & RESIZE_VERT)
-	    && wndpl.rcNormalPosition.bottom > workarea_rect.bottom)
-	OffsetRect(&wndpl.rcNormalPosition,
-		0, workarea_rect.bottom - wndpl.rcNormalPosition.bottom);
+	if ((direction & RESIZE_VERT)
+		&& window_rect.bottom > workarea_rect.bottom)
+	    OffsetRect(&window_rect,
+		    0, workarea_rect.bottom - window_rect.bottom);
 
-    if ((direction & RESIZE_VERT)
-	    && wndpl.rcNormalPosition.top < workarea_rect.top)
-	OffsetRect(&wndpl.rcNormalPosition,
-		0, workarea_rect.top - wndpl.rcNormalPosition.top);
+	if ((direction & RESIZE_VERT)
+		&& window_rect.top < workarea_rect.top)
+	    OffsetRect(&window_rect,
+		    0, workarea_rect.top - window_rect.top);
+    }
 
-    // set window position - we should use SetWindowPlacement rather than
-    // SetWindowPos as the MSDN docs say the coord systems returned by
-    // these two are not compatible.
-    SetWindowPlacement(s_hwnd, &wndpl);
+    MoveWindow(s_hwnd, window_rect.left, window_rect.top,
+						win_width, win_height, TRUE);
+
+    //TRACE("New pos: %d,%d  New size: %d,%d",
+    //	    window_rect.left, window_rect.top, win_width, win_height);
 
     SetActiveWindow(s_hwnd);
     SetFocus(s_hwnd);
 
-#ifdef FEAT_MENU
     // Menu may wrap differently now
     gui_mswin_get_menu_height(!gui.starting);
-#endif
 }
 
 
@@ -5565,12 +6061,16 @@ _OnImeNotify(HWND hWnd, DWORD dwCommand, DWORD dwData UNUSED)
 	case IMN_SETOPENSTATUS:
 	    if (pImmGetOpenStatus(hImc))
 	    {
-		pImmSetCompositionFontW(hImc, &norm_logfont);
+		LOGFONTW lf = norm_logfont;
+		if (s_process_dpi_aware == DPI_AWARENESS_UNAWARE)
+		    // Work around when PerMonitorV2 is not enabled in the process level.
+		    lf.lfHeight = lf.lfHeight * DEFAULT_DPI / s_dpi;
+		pImmSetCompositionFontW(hImc, &lf);
 		im_set_position(gui.row, gui.col);
 
 		// Disable langmap
-		State &= ~LANGMAP;
-		if (State & INSERT)
+		State &= ~MODE_LANGMAP;
+		if (State & MODE_INSERT)
 		{
 # if defined(FEAT_KEYMAP)
 		    // Unshown 'keymap' in status lines
@@ -5622,56 +6122,6 @@ _OnImeComposition(HWND hwnd, WPARAM dbcs UNUSED, LPARAM param)
 }
 
 /*
- * get the current composition string, in UCS-2; *lenp is the number of
- * *lenp is the number of Unicode characters.
- */
-    static short_u *
-GetCompositionString_inUCS2(HIMC hIMC, DWORD GCS, int *lenp)
-{
-    LONG	    ret;
-    LPWSTR	    wbuf = NULL;
-    char_u	    *buf;
-
-    if (!pImmGetContext)
-	return NULL; // no imm32.dll
-
-    // Try Unicode; this'll always work on NT regardless of codepage.
-    ret = pImmGetCompositionStringW(hIMC, GCS, NULL, 0);
-    if (ret == 0)
-	return NULL; // empty
-
-    if (ret > 0)
-    {
-	// Allocate the requested buffer plus space for the NUL character.
-	wbuf = alloc(ret + sizeof(WCHAR));
-	if (wbuf != NULL)
-	{
-	    pImmGetCompositionStringW(hIMC, GCS, wbuf, ret);
-	    *lenp = ret / sizeof(WCHAR);
-	}
-	return (short_u *)wbuf;
-    }
-
-    // ret < 0; we got an error, so try the ANSI version.  This'll work
-    // on 9x/ME, but only if the codepage happens to be set to whatever
-    // we're inputting.
-    ret = pImmGetCompositionStringA(hIMC, GCS, NULL, 0);
-    if (ret <= 0)
-	return NULL; // empty or error
-
-    buf = alloc(ret);
-    if (buf == NULL)
-	return NULL;
-    pImmGetCompositionStringA(hIMC, GCS, buf, ret);
-
-    // convert from codepage to UCS-2
-    MultiByteToWideChar_alloc(GetACP(), 0, (LPCSTR)buf, ret, &wbuf, lenp);
-    vim_free(buf);
-
-    return (short_u *)wbuf;
-}
-
-/*
  * void GetResultStr()
  *
  * This handles WM_IME_COMPOSITION with GCS_RESULTSTR flag on.
@@ -5681,16 +6131,26 @@ GetCompositionString_inUCS2(HIMC hIMC, DWORD GCS, int *lenp)
 GetResultStr(HWND hwnd, int GCS, int *lenp)
 {
     HIMC	hIMC;		// Input context handle.
-    short_u	*buf = NULL;
+    LONG	ret;
+    WCHAR	*buf = NULL;
     char_u	*convbuf = NULL;
 
     if (!pImmGetContext || (hIMC = pImmGetContext(hwnd)) == (HIMC)0)
 	return NULL;
 
-    // Reads in the composition string.
-    buf = GetCompositionString_inUCS2(hIMC, GCS, lenp);
+    // Get the length of the composition string.
+    ret = pImmGetCompositionStringW(hIMC, GCS, NULL, 0);
+    if (ret <= 0)
+	return NULL;
+
+    // Allocate the requested buffer plus space for the NUL character.
+    buf = alloc(ret + sizeof(WCHAR));
     if (buf == NULL)
 	return NULL;
+
+    // Reads in the composition string.
+    pImmGetCompositionStringW(hIMC, GCS, buf, ret);
+    *lenp = ret / sizeof(WCHAR);
 
     convbuf = utf16_to_enc(buf, lenp);
     pImmReleaseContext(hwnd, hIMC);
@@ -5733,6 +6193,12 @@ im_set_position(int row, int col)
 	cfs.ptCurrentPos.x = FILL_X(col);
 	cfs.ptCurrentPos.y = FILL_Y(row);
 	MapWindowPoints(s_textArea, s_hwnd, &cfs.ptCurrentPos, 1);
+	if (s_process_dpi_aware == DPI_AWARENESS_UNAWARE)
+	{
+	    // Work around when PerMonitorV2 is not enabled in the process level.
+	    cfs.ptCurrentPos.x = cfs.ptCurrentPos.x * DEFAULT_DPI / s_dpi;
+	    cfs.ptCurrentPos.y = cfs.ptCurrentPos.y * DEFAULT_DPI / s_dpi;
+	}
 	pImmSetCompositionWindow(hImc, &cfs);
 
 	pImmReleaseContext(s_hwnd, hImc);
@@ -5756,64 +6222,64 @@ im_set_active(int active)
     }
 # endif
 
-    if (pImmGetContext)	    // if NULL imm32.dll wasn't loaded (yet)
+    if (!pImmGetContext)    // if NULL imm32.dll wasn't loaded (yet)
+	return;
+
+    if (p_imdisable)
     {
-	if (p_imdisable)
+	if (hImcOld == (HIMC)0)
 	{
-	    if (hImcOld == (HIMC)0)
-	    {
-		hImcOld = pImmGetContext(s_hwnd);
-		if (hImcOld)
-		    pImmAssociateContext(s_hwnd, (HIMC)0);
-	    }
-	    active = FALSE;
+	    hImcOld = pImmGetContext(s_hwnd);
+	    if (hImcOld)
+		pImmAssociateContext(s_hwnd, (HIMC)0);
 	}
-	else if (hImcOld != (HIMC)0)
+	active = FALSE;
+    }
+    else if (hImcOld != (HIMC)0)
+    {
+	pImmAssociateContext(s_hwnd, hImcOld);
+	hImcOld = (HIMC)0;
+    }
+
+    hImc = pImmGetContext(s_hwnd);
+    if (!hImc)
+	return;
+
+    /*
+     * for Korean ime
+     */
+    HKL hKL = GetKeyboardLayout(0);
+
+    if (LOWORD(hKL) == MAKELANGID(LANG_KOREAN, SUBLANG_KOREAN))
+    {
+	static DWORD dwConversionSaved = 0, dwSentenceSaved = 0;
+	static BOOL bSaved = FALSE;
+
+	if (active)
 	{
-	    pImmAssociateContext(s_hwnd, hImcOld);
-	    hImcOld = (HIMC)0;
+	    // if we have a saved conversion status, restore it
+	    if (bSaved)
+		pImmSetConversionStatus(hImc, dwConversionSaved,
+			dwSentenceSaved);
+	    bSaved = FALSE;
 	}
-
-	hImc = pImmGetContext(s_hwnd);
-	if (hImc)
+	else
 	{
-	    /*
-	     * for Korean ime
-	     */
-	    HKL hKL = GetKeyboardLayout(0);
-
-	    if (LOWORD(hKL) == MAKELANGID(LANG_KOREAN, SUBLANG_KOREAN))
+	    // save conversion status and disable korean
+	    if (pImmGetConversionStatus(hImc, &dwConversionSaved,
+			&dwSentenceSaved))
 	    {
-		static DWORD dwConversionSaved = 0, dwSentenceSaved = 0;
-		static BOOL bSaved = FALSE;
-
-		if (active)
-		{
-		    // if we have a saved conversion status, restore it
-		    if (bSaved)
-			pImmSetConversionStatus(hImc, dwConversionSaved,
-							     dwSentenceSaved);
-		    bSaved = FALSE;
-		}
-		else
-		{
-		    // save conversion status and disable korean
-		    if (pImmGetConversionStatus(hImc, &dwConversionSaved,
-							    &dwSentenceSaved))
-		    {
-			bSaved = TRUE;
-			pImmSetConversionStatus(hImc,
-				dwConversionSaved & ~(IME_CMODE_NATIVE
-						       | IME_CMODE_FULLSHAPE),
-				dwSentenceSaved);
-		    }
-		}
+		bSaved = TRUE;
+		pImmSetConversionStatus(hImc,
+			dwConversionSaved & ~(IME_CMODE_NATIVE
+			    | IME_CMODE_FULLSHAPE),
+			dwSentenceSaved);
 	    }
-
-	    pImmSetOpenStatus(hImc, active);
-	    pImmReleaseContext(s_hwnd, hImc);
 	}
     }
+
+    pImmSetOpenStatus(hImc, active);
+    pImmReleaseContext(s_hwnd, hImc);
 }
 
 /*
@@ -5840,42 +6306,6 @@ im_get_status(void)
 
 #endif // FEAT_MBYTE_IME
 
-#if !defined(FEAT_MBYTE_IME) && defined(GLOBAL_IME)
-// Win32 with GLOBAL IME
-
-/*
- * Notify cursor position to IM.
- */
-    void
-im_set_position(int row, int col)
-{
-    // Win32 with GLOBAL IME
-    POINT p;
-
-    p.x = FILL_X(col);
-    p.y = FILL_Y(row);
-    MapWindowPoints(s_textArea, s_hwnd, &p, 1);
-    global_ime_set_position(&p);
-}
-
-/*
- * Set IM status on ("active" is TRUE) or off ("active" is FALSE).
- */
-    void
-im_set_active(int active)
-{
-    global_ime_set_status(active);
-}
-
-/*
- * Get IM status.  When IM is on, return not 0.  Else return 0.
- */
-    int
-im_get_status(void)
-{
-    return global_ime_get_status();
-}
-#endif
 
 /*
  * Convert latin9 text "text[len]" to ucs-2 in "unicodebuf".
@@ -5917,7 +6347,7 @@ latin9_to_ucs(char_u *text, int len, WCHAR *unicodebuf)
  * noticeably so.
  */
     static void
-RevOut( HDC s_hdc,
+RevOut( HDC hdc,
 	int col,
 	int row,
 	UINT foptions,
@@ -5929,7 +6359,7 @@ RevOut( HDC s_hdc,
     int		ix;
 
     for (ix = 0; ix < (int)len; ++ix)
-	ExtTextOut(s_hdc, col + TEXT_X(ix), row, foptions,
+	ExtTextOut(hdc, col + TEXT_X(ix), row, foptions,
 					pcliprect, text + ix, 1, padding);
 }
 #endif
@@ -6005,7 +6435,6 @@ gui_mch_draw_string(
 {
     static int	*padding = NULL;
     static int	pad_size = 0;
-    int		i;
     const RECT	*pcliprect = NULL;
     UINT	foptions = 0;
     static WCHAR *unicodebuf = NULL;
@@ -6096,6 +6525,8 @@ gui_mch_draw_string(
 
     if (pad_size != Columns || padding == NULL || padding[0] != gui.char_width)
     {
+	int	i;
+
 	vim_free(padding);
 	pad_size = Columns;
 
@@ -6152,13 +6583,11 @@ gui_mch_draw_string(
 	// handled here.
 	int		i;
 	int		wlen;	// string length in words
-	int		clen;	// string length in characters
 	int		cells;	// cell width of string up to composing char
 	int		cw;	// width of current cell
 	int		c;
 
 	wlen = 0;
-	clen = 0;
 	cells = 0;
 	for (i = 0; i < len; )
 	{
@@ -6198,7 +6627,6 @@ gui_mch_draw_string(
 	    }
 	    cells += cw;
 	    i += utf_ptr2len_len(text + i, len - i);
-	    ++clen;
 	}
 #if defined(FEAT_DIRECTX)
 	if (IS_ENABLE_DIRECTX())
@@ -6334,20 +6762,17 @@ gui_mch_get_screen_dimensions(int *screen_w, int *screen_h)
     get_work_area(&workarea_rect);
 
     *screen_w = workarea_rect.right - workarea_rect.left
-		- (GetSystemMetrics(SM_CXFRAME) +
-		   GetSystemMetrics(SM_CXPADDEDBORDER)) * 2;
+		- (pGetSystemMetricsForDpi(SM_CXFRAME, s_dpi) +
+		   pGetSystemMetricsForDpi(SM_CXPADDEDBORDER, s_dpi)) * 2;
 
     // FIXME: dirty trick: Because the gui_get_base_height() doesn't include
     // the menubar for MSwin, we subtract it from the screen height, so that
     // the window size can be made to fit on the screen.
     *screen_h = workarea_rect.bottom - workarea_rect.top
-		- (GetSystemMetrics(SM_CYFRAME) +
-		   GetSystemMetrics(SM_CXPADDEDBORDER)) * 2
-		- GetSystemMetrics(SM_CYCAPTION)
-#ifdef FEAT_MENU
-		- gui_mswin_get_menu_height(FALSE)
-#endif
-		;
+		- (pGetSystemMetricsForDpi(SM_CYFRAME, s_dpi) +
+		   pGetSystemMetricsForDpi(SM_CXPADDEDBORDER, s_dpi)) * 2
+		- pGetSystemMetricsForDpi(SM_CYCAPTION, s_dpi)
+		- gui_mswin_get_menu_height(FALSE);
 }
 
 
@@ -6403,7 +6828,7 @@ gui_mch_show_popupmenu(vimmenu_T *menu)
 {
     POINT mp;
 
-    (void)GetCursorPos((LPPOINT)&mp);
+    (void)GetCursorPos(&mp);
     gui_mch_show_popupmenu_at(menu, (int)mp.x, (int)mp.y);
 }
 
@@ -6412,28 +6837,28 @@ gui_make_popup(char_u *path_name, int mouse_pos)
 {
     vimmenu_T	*menu = gui_find_menu(path_name);
 
-    if (menu != NULL)
+    if (menu == NULL)
+	return;
+
+    POINT	p;
+
+    // Find the position of the current cursor
+    GetDCOrgEx(s_hdc, &p);
+    if (mouse_pos)
     {
-	POINT	p;
+	int	mx, my;
 
-	// Find the position of the current cursor
-	GetDCOrgEx(s_hdc, &p);
-	if (mouse_pos)
-	{
-	    int	mx, my;
-
-	    gui_mch_getmouse(&mx, &my);
-	    p.x += mx;
-	    p.y += my;
-	}
-	else if (curwin != NULL)
-	{
-	    p.x += TEXT_X(curwin->w_wincol + curwin->w_wcol + 1);
-	    p.y += TEXT_Y(W_WINROW(curwin) + curwin->w_wrow + 1);
-	}
-	msg_scroll = FALSE;
-	gui_mch_show_popupmenu_at(menu, (int)p.x, (int)p.y);
+	gui_mch_getmouse(&mx, &my);
+	p.x += mx;
+	p.y += my;
     }
+    else if (curwin != NULL)
+    {
+	p.x += TEXT_X(curwin->w_wincol + curwin->w_wcol + 1);
+	p.y += TEXT_Y(W_WINROW(curwin) + curwin->w_wrow + 1);
+    }
+    msg_scroll = FALSE;
+    gui_mch_show_popupmenu_at(menu, (int)p.x, (int)p.y);
 }
 
 # if defined(FEAT_TEAROFF) || defined(PROTO)
@@ -6616,7 +7041,7 @@ gui_mch_menu_grey(
     if (menu->submenu_id == (HMENU)-1)
     {
 	SendMessage(s_toolbarhwnd, TB_ENABLEBUTTON,
-	    (WPARAM)menu->id, (LPARAM) MAKELONG((grey ? FALSE : TRUE), 0) );
+	    (WPARAM)menu->id, (LPARAM) MAKELONG((grey ? FALSE : TRUE), 0));
     }
     else
 # endif
@@ -6649,7 +7074,6 @@ gui_mch_menu_grey(
 
 // define some macros used to make the dialogue creation more readable
 
-#define add_string(s) strcpy((LPSTR)p, s); (LPSTR)p += (strlen((LPSTR)p) + 1)
 #define add_word(x)		*p++ = (x)
 #define add_long(x)		dwp = (DWORD *)p; *dwp++ = (x); p = (WORD *)dwp
 
@@ -6801,6 +7225,9 @@ gui_mch_dialog(
 # endif
     garray_T	ga;
     int		l;
+    int		dlg_icon_width;
+    int		dlg_icon_height;
+    int		dpi;
 
 # ifndef NO_CONSOLE
     // Don't output anything in silent mode ("ex -s")
@@ -6812,7 +7239,13 @@ gui_mch_dialog(
 # endif
 
     if (s_hwnd == NULL)
+    {
+	load_dpi_func();
+	s_dpi = dpi = pGetDpiForSystem();
 	get_dialog_font_metrics();
+    }
+    else
+	dpi = pGetDpiForSystem();
 
     if ((type < 0) || (type > VIM_LAST_TYPE))
 	type = 0;
@@ -6869,20 +7302,13 @@ gui_mch_dialog(
     }
     else
 # endif
-    font = CreateFont(-DLG_FONT_POINT_SIZE, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		      VARIABLE_PITCH , DLG_FONT_NAME);
-    if (s_usenewlook)
-    {
-	oldFont = SelectFont(hdc, font);
-	dlgPaddingX = DLG_PADDING_X;
-	dlgPaddingY = DLG_PADDING_Y;
-    }
-    else
-    {
-	oldFont = SelectFont(hdc, GetStockObject(SYSTEM_FONT));
-	dlgPaddingX = DLG_OLD_STYLE_PADDING_X;
-	dlgPaddingY = DLG_OLD_STYLE_PADDING_Y;
-    }
+	font = CreateFont(-DLG_FONT_POINT_SIZE, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, VARIABLE_PITCH, DLG_FONT_NAME);
+
+    oldFont = SelectFont(hdc, font);
+    dlgPaddingX = DLG_PADDING_X;
+    dlgPaddingY = DLG_PADDING_Y;
+
     GetTextMetrics(hdc, &fontInfo);
     fontHeight = fontInfo.tmHeight;
 
@@ -6897,8 +7323,8 @@ gui_mch_dialog(
 	// We don't have a window, use the desktop area.
 	get_work_area(&workarea_rect);
 	maxDialogWidth = workarea_rect.right - workarea_rect.left - 100;
-	if (maxDialogWidth > 600)
-	    maxDialogWidth = 600;
+	if (maxDialogWidth > adjust_by_system_dpi(600))
+	    maxDialogWidth = adjust_by_system_dpi(600);
 	// Leave some room for the taskbar.
 	maxDialogHeight = workarea_rect.bottom - workarea_rect.top - 150;
     }
@@ -6907,17 +7333,17 @@ gui_mch_dialog(
 	// Use our own window for the size, unless it's very small.
 	GetWindowRect(s_hwnd, &rect);
 	maxDialogWidth = rect.right - rect.left
-				   - (GetSystemMetrics(SM_CXFRAME) +
-				      GetSystemMetrics(SM_CXPADDEDBORDER)) * 2;
-	if (maxDialogWidth < DLG_MIN_MAX_WIDTH)
-	    maxDialogWidth = DLG_MIN_MAX_WIDTH;
+		       - (pGetSystemMetricsForDpi(SM_CXFRAME, dpi) +
+			  pGetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi)) * 2;
+	if (maxDialogWidth < adjust_by_system_dpi(DLG_MIN_MAX_WIDTH))
+	    maxDialogWidth = adjust_by_system_dpi(DLG_MIN_MAX_WIDTH);
 
 	maxDialogHeight = rect.bottom - rect.top
-				   - (GetSystemMetrics(SM_CYFRAME) +
-				      GetSystemMetrics(SM_CXPADDEDBORDER)) * 4
-				   - GetSystemMetrics(SM_CYCAPTION);
-	if (maxDialogHeight < DLG_MIN_MAX_HEIGHT)
-	    maxDialogHeight = DLG_MIN_MAX_HEIGHT;
+		       - (pGetSystemMetricsForDpi(SM_CYFRAME, dpi) +
+			  pGetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi)) * 4
+		       - pGetSystemMetricsForDpi(SM_CYCAPTION, dpi);
+	if (maxDialogHeight < adjust_by_system_dpi(DLG_MIN_MAX_HEIGHT))
+	    maxDialogHeight = adjust_by_system_dpi(DLG_MIN_MAX_HEIGHT);
     }
 
     // Set dlgwidth to width of message.
@@ -6953,7 +7379,8 @@ gui_mch_dialog(
 		if (last_white != NULL)
 		{
 		    // break the line just after a space
-		    ga.ga_len -= (int)(pend - (last_white + 1));
+		    if (pend > last_white)
+			ga.ga_len -= (int)(pend - (last_white + 1));
 		    pend = last_white + 1;
 		    last_white = NULL;
 		}
@@ -6978,12 +7405,15 @@ gui_mch_dialog(
 
     messageWidth += 10;		// roundoff space
 
-    // Add width of icon to dlgwidth, and some space
-    dlgwidth = messageWidth + DLG_ICON_WIDTH + 3 * dlgPaddingX
-					     + GetSystemMetrics(SM_CXVSCROLL);
+    dlg_icon_width = adjust_by_system_dpi(DLG_ICON_WIDTH);
+    dlg_icon_height = adjust_by_system_dpi(DLG_ICON_HEIGHT);
 
-    if (msgheight < DLG_ICON_HEIGHT)
-	msgheight = DLG_ICON_HEIGHT;
+    // Add width of icon to dlgwidth, and some space
+    dlgwidth = messageWidth + dlg_icon_width + 3 * dlgPaddingX
+			     + pGetSystemMetricsForDpi(SM_CXVSCROLL, dpi);
+
+    if (msgheight < dlg_icon_height)
+	msgheight = dlg_icon_height;
 
     /*
      * Check button names.  A long one will make the dialog wider.
@@ -7039,10 +7469,7 @@ gui_mch_dialog(
 	dlgwidth = DLG_MIN_WIDTH;	// Don't allow a really thin dialog!
 
     // start to fill in the dlgtemplate information.  addressing by WORDs
-    if (s_usenewlook)
-	lStyle = DS_MODALFRAME | WS_CAPTION |DS_3DLOOK| WS_VISIBLE |DS_SETFONT;
-    else
-	lStyle = DS_MODALFRAME | WS_CAPTION |DS_3DLOOK| WS_VISIBLE;
+    lStyle = DS_MODALFRAME | WS_CAPTION | DS_3DLOOK | WS_VISIBLE | DS_SETFONT;
 
     add_long(lStyle);
     add_long(0);	// (lExtendedStyle)
@@ -7071,7 +7498,7 @@ gui_mch_dialog(
 	dlgheight = maxDialogHeight;
 	scroll_flag = WS_VSCROLL;
 	// Make sure scrollbar doesn't appear in the middle of the dialog
-	messageWidth = dlgwidth - DLG_ICON_WIDTH - 3 * dlgPaddingX;
+	messageWidth = dlgwidth - dlg_icon_width - 3 * dlgPaddingX;
     }
 
     add_word(PixelToDialogY(dlgheight));
@@ -7084,26 +7511,23 @@ gui_mch_dialog(
 				   : (LPSTR)("Vim "VIM_VERSION_MEDIUM)), TRUE);
     p += nchar;
 
-    if (s_usenewlook)
-    {
-	// do the font, since DS_3DLOOK doesn't work properly
+    // do the font, since DS_3DLOOK doesn't work properly
 # ifdef USE_SYSMENU_FONT
-	if (use_lfSysmenu)
-	{
-	    // point size
-	    *p++ = -MulDiv(lfSysmenu.lfHeight, 72,
-		    GetDeviceCaps(hdc, LOGPIXELSY));
-	    wcscpy(p, lfSysmenu.lfFaceName);
-	    nchar = (int)wcslen(lfSysmenu.lfFaceName) + 1;
-	}
-	else
-# endif
-	{
-	    *p++ = DLG_FONT_POINT_SIZE;		// point size
-	    nchar = nCopyAnsiToWideChar(p, DLG_FONT_NAME, FALSE);
-	}
-	p += nchar;
+    if (use_lfSysmenu)
+    {
+	// point size
+	*p++ = -MulDiv(lfSysmenu.lfHeight, 72,
+		GetDeviceCaps(hdc, LOGPIXELSY));
+	wcscpy(p, lfSysmenu.lfFaceName);
+	nchar = (int)wcslen(lfSysmenu.lfFaceName) + 1;
     }
+    else
+# endif
+    {
+	*p++ = DLG_FONT_POINT_SIZE;		// point size
+	nchar = nCopyAnsiToWideChar(p, DLG_FONT_NAME, FALSE);
+    }
+    p += nchar;
 
     buttonYpos = msgheight + 2 * dlgPaddingY;
 
@@ -7168,14 +7592,14 @@ gui_mch_dialog(
     p = add_dialog_element(p, SS_ICON,
 	    PixelToDialogX(dlgPaddingX),
 	    PixelToDialogY(dlgPaddingY),
-	    PixelToDialogX(DLG_ICON_WIDTH),
-	    PixelToDialogY(DLG_ICON_HEIGHT),
+	    PixelToDialogX(dlg_icon_width),
+	    PixelToDialogY(dlg_icon_height),
 	    DLG_NONBUTTON_CONTROL + 0, (WORD)0x0082,
 	    dlg_icons[type]);
 
     // Dialog message
     p = add_dialog_element(p, ES_LEFT|scroll_flag|ES_MULTILINE|ES_READONLY,
-	    PixelToDialogX(2 * dlgPaddingX + DLG_ICON_WIDTH),
+	    PixelToDialogX(2 * dlgPaddingX + dlg_icon_width),
 	    PixelToDialogY(dlgPaddingY),
 	    (WORD)(PixelToDialogX(messageWidth) + 1),
 	    PixelToDialogY(msgheight),
@@ -7285,8 +7709,8 @@ add_dialog_element(
 
     *p++ = 0;  // advance pointer over nExtraStuff WORD   - 2 more
 
-    return p;	//total = 15+ (strlen(caption)) words
-		//	   = 30 + 2(strlen(caption) bytes reqd
+    return p;	// total = 15 + strlen(caption) words
+		// bytes read = 2 * total
 }
 
 
@@ -7446,22 +7870,19 @@ tearoff_callback(
 
 
 /*
- * Decide whether to use the "new look" (small, non-bold font) or the "old
- * look" (big, clanky font) for dialogs, and work out a few values for use
- * later accordingly.
+ * Computes the dialog base units based on the current dialog font.
+ * We don't use the GetDialogBaseUnits() API, because we don't use the
+ * (old-style) system font.
  */
     static void
 get_dialog_font_metrics(void)
 {
     HDC		    hdc;
     HFONT	    hfontTools = 0;
-    DWORD	    dlgFontSize;
     SIZE	    size;
 #ifdef USE_SYSMENU_FONT
     LOGFONTW	    lfSysmenu;
 #endif
-
-    s_usenewlook = FALSE;
 
 #ifdef USE_SYSMENU_FONT
     if (gui_w32_get_menu_font(&lfSysmenu) == OK)
@@ -7469,33 +7890,15 @@ get_dialog_font_metrics(void)
     else
 #endif
 	hfontTools = CreateFont(-DLG_FONT_POINT_SIZE, 0, 0, 0, 0, 0, 0, 0,
-				0, 0, 0, 0, VARIABLE_PITCH , DLG_FONT_NAME);
+				0, 0, 0, 0, VARIABLE_PITCH, DLG_FONT_NAME);
 
-    if (hfontTools)
-    {
-	hdc = GetDC(s_hwnd);
-	SelectObject(hdc, hfontTools);
-	/*
-	 * GetTextMetrics() doesn't return the right value in
-	 * tmAveCharWidth, so we have to figure out the dialog base units
-	 * ourselves.
-	 */
-	GetTextExtentPoint(hdc,
-		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
-		52, &size);
-	ReleaseDC(s_hwnd, hdc);
+    hdc = GetDC(s_hwnd);
+    SelectObject(hdc, hfontTools);
+    GetAverageFontSize(hdc, &size);
+    ReleaseDC(s_hwnd, hdc);
 
-	s_dlgfntwidth = (WORD)((size.cx / 26 + 1) / 2);
-	s_dlgfntheight = (WORD)size.cy;
-	s_usenewlook = TRUE;
-    }
-
-    if (!s_usenewlook)
-    {
-	dlgFontSize = GetDialogBaseUnits();	// fall back to big old system
-	s_dlgfntwidth = LOWORD(dlgFontSize);
-	s_dlgfntheight = HIWORD(dlgFontSize);
-    }
+    s_dlgfntwidth = (WORD)size.cx;
+    s_dlgfntheight = (WORD)size.cy;
 }
 
 #if defined(FEAT_MENU) && defined(FEAT_TEAROFF)
@@ -7543,7 +7946,7 @@ gui_mch_tearoff(
     if (IsWindow(menu->tearoff_handle))
     {
 	POINT mp;
-	if (GetCursorPos((LPPOINT)&mp))
+	if (GetCursorPos(&mp))
 	{
 	    SetWindowPos(menu->tearoff_handle, NULL, mp.x, mp.y, 0, 0,
 		    SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER);
@@ -7574,12 +7977,10 @@ gui_mch_tearoff(
     }
     else
 # endif
-    font = CreateFont(-DLG_FONT_POINT_SIZE, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		      VARIABLE_PITCH , DLG_FONT_NAME);
-    if (s_usenewlook)
-	oldFont = SelectFont(hdc, font);
-    else
-	oldFont = SelectFont(hdc, GetStockObject(SYSTEM_FONT));
+	font = CreateFont(-DLG_FONT_POINT_SIZE, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, VARIABLE_PITCH, DLG_FONT_NAME);
+
+    oldFont = SelectFont(hdc, font);
 
     // Calculate width of a single space.  Used for padding columns to the
     // right width.
@@ -7636,10 +8037,7 @@ gui_mch_tearoff(
     dlgwidth += 2 * TEAROFF_PADDING_X + TEAROFF_BUTTON_PAD_X;
 
     // start to fill in the dlgtemplate information.  addressing by WORDs
-    if (s_usenewlook)
-	lStyle = DS_MODALFRAME | WS_CAPTION| WS_SYSMENU |DS_SETFONT| WS_VISIBLE;
-    else
-	lStyle = DS_MODALFRAME | WS_CAPTION| WS_SYSMENU | WS_VISIBLE;
+    lStyle = DS_MODALFRAME | WS_CAPTION | WS_SYSMENU | DS_SETFONT | WS_VISIBLE;
 
     lExtendedStyle = WS_EX_TOOLWINDOW|WS_EX_STATICEDGE;
     *p++ = LOWORD(lStyle);
@@ -7669,26 +8067,23 @@ gui_mch_tearoff(
 			    : (LPSTR)("Vim "VIM_VERSION_MEDIUM)), TRUE);
     p += nchar;
 
-    if (s_usenewlook)
-    {
-	// do the font, since DS_3DLOOK doesn't work properly
+    // do the font, since DS_3DLOOK doesn't work properly
 # ifdef USE_SYSMENU_FONT
-	if (use_lfSysmenu)
-	{
-	    // point size
-	    *p++ = -MulDiv(lfSysmenu.lfHeight, 72,
-		    GetDeviceCaps(hdc, LOGPIXELSY));
-	    wcscpy(p, lfSysmenu.lfFaceName);
-	    nchar = (int)wcslen(lfSysmenu.lfFaceName) + 1;
-	}
-	else
-# endif
-	{
-	    *p++ = DLG_FONT_POINT_SIZE;		// point size
-	    nchar = nCopyAnsiToWideChar(p, DLG_FONT_NAME, FALSE);
-	}
-	p += nchar;
+    if (use_lfSysmenu)
+    {
+	// point size
+	*p++ = -MulDiv(lfSysmenu.lfHeight, 72,
+		GetDeviceCaps(hdc, LOGPIXELSY));
+	wcscpy(p, lfSysmenu.lfFaceName);
+	nchar = (int)wcslen(lfSysmenu.lfFaceName) + 1;
     }
+    else
+# endif
+    {
+	*p++ = DLG_FONT_POINT_SIZE;		// point size
+	nchar = nCopyAnsiToWideChar(p, DLG_FONT_NAME, FALSE);
+    }
+    p += nchar;
 
     /*
      * Loop over all the items in the menu.
@@ -7836,11 +8231,6 @@ gui_mch_tearoff(
 #if defined(FEAT_TOOLBAR) || defined(PROTO)
 # include "gui_w32_rc.h"
 
-// This not defined in older SDKs
-# ifndef TBSTYLE_FLAT
-#  define TBSTYLE_FLAT		0x0800
-# endif
-
 /*
  * Create the toolbar, initially unpopulated.
  *  (just like the menu, there are no defaults, it's all
@@ -7874,6 +8264,34 @@ initialise_toolbar(void)
     s_toolbar_wndproc = SubclassWindow(s_toolbarhwnd, toolbar_wndproc);
 
     gui_mch_show_toolbar(vim_strchr(p_go, GO_TOOLBAR) != NULL);
+
+    update_toolbar_size();
+}
+
+    static void
+update_toolbar_size(void)
+{
+    int		w, h;
+    TBMETRICS	tbm;
+
+    tbm.cbSize = sizeof(TBMETRICS);
+    tbm.dwMask = TBMF_PAD | TBMF_BUTTONSPACING;
+    SendMessage(s_toolbarhwnd, TB_GETMETRICS, 0, (LPARAM)&tbm);
+    //TRACE("Pad: %d, %d", tbm.cxPad, tbm.cyPad);
+    //TRACE("ButtonSpacing: %d, %d", tbm.cxButtonSpacing, tbm.cyButtonSpacing);
+
+    w = (TOOLBAR_BUTTON_WIDTH + tbm.cxPad) * s_dpi / DEFAULT_DPI;
+    h = (TOOLBAR_BUTTON_HEIGHT + tbm.cyPad) * s_dpi / DEFAULT_DPI;
+    //TRACE("button size: %d, %d", w, h);
+    SendMessage(s_toolbarhwnd, TB_SETBUTTONSIZE, 0, MAKELPARAM(w, h));
+    gui.toolbar_height = h + 6;
+
+    //DWORD s = SendMessage(s_toolbarhwnd, TB_GETBUTTONSIZE, 0, 0);
+    //TRACE("actual button size: %d, %d", LOWORD(s), HIWORD(s));
+
+    // TODO:
+    // Currently, this function only updates the size of toolbar buttons.
+    // It would be nice if the toolbar images are resized based on DPI.
 }
 
     static LRESULT CALLBACK
@@ -7967,9 +8385,7 @@ initialise_tabline(void)
 
     gui.tabline_height = TABLINE_HEIGHT;
 
-# ifdef USE_SYSMENU_FONT
     set_tabline_font();
-# endif
 }
 
 /*
@@ -7986,7 +8402,7 @@ GetTabFromPoint(
     {
 	TCHITTESTINFO htinfo;
 	htinfo.pt = pt;
-	// ignore if a window under cusor is not tabcontrol.
+	// ignore if a window under cursor is not tabcontrol.
 	if (s_tabhwnd == hWnd)
 	{
 	    int idx = TabCtrl_HitTest(s_tabhwnd, &htinfo);
@@ -8032,7 +8448,8 @@ tabline_wndproc(
 	    {
 		pt.x = GET_X_LPARAM(lParam);
 		pt.y = s_pt.y;
-		if (abs(pt.x - s_pt.x) > GetSystemMetrics(SM_CXDRAG))
+		if (abs(pt.x - s_pt.x) >
+			pGetSystemMetricsForDpi(SM_CXDRAG, s_dpi))
 		{
 		    SetCursor(LoadCursor(NULL, IDC_SIZEWE));
 
@@ -8070,6 +8487,20 @@ tabline_wndproc(
 		}
 		break;
 	    }
+	case WM_MBUTTONUP:
+	    {
+		TCHITTESTINFO htinfo;
+
+		htinfo.pt.x = GET_X_LPARAM(lParam);
+		htinfo.pt.y = GET_Y_LPARAM(lParam);
+		idx0 = TabCtrl_HitTest(hwnd, &htinfo);
+		if (idx0 != -1)
+		{
+		    idx0 += 1;
+		    send_tabline_menu_event(idx0, TABLINE_MENU_CLOSE);
+		}
+		break;
+	    }
 	default:
 	    break;
     }
@@ -8099,33 +8530,30 @@ dyn_imm_load(void)
     if (hLibImm == NULL)
 	return;
 
-    pImmGetCompositionStringA
-	    = (void *)GetProcAddress(hLibImm, "ImmGetCompositionStringA");
     pImmGetCompositionStringW
-	    = (void *)GetProcAddress(hLibImm, "ImmGetCompositionStringW");
+	    = (LONG (WINAPI *)(HIMC, DWORD, LPVOID, DWORD))GetProcAddress(hLibImm, "ImmGetCompositionStringW");
     pImmGetContext
-	    = (void *)GetProcAddress(hLibImm, "ImmGetContext");
+	    = (HIMC (WINAPI *)(HWND))GetProcAddress(hLibImm, "ImmGetContext");
     pImmAssociateContext
-	    = (void *)GetProcAddress(hLibImm, "ImmAssociateContext");
+	    = (HIMC (WINAPI *)(HWND, HIMC))GetProcAddress(hLibImm, "ImmAssociateContext");
     pImmReleaseContext
-	    = (void *)GetProcAddress(hLibImm, "ImmReleaseContext");
+	    = (BOOL (WINAPI *)(HWND, HIMC))GetProcAddress(hLibImm, "ImmReleaseContext");
     pImmGetOpenStatus
-	    = (void *)GetProcAddress(hLibImm, "ImmGetOpenStatus");
+	    = (BOOL (WINAPI *)(HIMC))GetProcAddress(hLibImm, "ImmGetOpenStatus");
     pImmSetOpenStatus
-	    = (void *)GetProcAddress(hLibImm, "ImmSetOpenStatus");
+	    = (BOOL (WINAPI *)(HIMC, BOOL))GetProcAddress(hLibImm, "ImmSetOpenStatus");
     pImmGetCompositionFontW
-	    = (void *)GetProcAddress(hLibImm, "ImmGetCompositionFontW");
+	    = (BOOL (WINAPI *)(HIMC, LPLOGFONTW))GetProcAddress(hLibImm, "ImmGetCompositionFontW");
     pImmSetCompositionFontW
-	    = (void *)GetProcAddress(hLibImm, "ImmSetCompositionFontW");
+	    = (BOOL (WINAPI *)(HIMC, LPLOGFONTW))GetProcAddress(hLibImm, "ImmSetCompositionFontW");
     pImmSetCompositionWindow
-	    = (void *)GetProcAddress(hLibImm, "ImmSetCompositionWindow");
+	    = (BOOL (WINAPI *)(HIMC, LPCOMPOSITIONFORM))GetProcAddress(hLibImm, "ImmSetCompositionWindow");
     pImmGetConversionStatus
-	    = (void *)GetProcAddress(hLibImm, "ImmGetConversionStatus");
+	    = (BOOL (WINAPI *)(HIMC, LPDWORD, LPDWORD))GetProcAddress(hLibImm, "ImmGetConversionStatus");
     pImmSetConversionStatus
-	    = (void *)GetProcAddress(hLibImm, "ImmSetConversionStatus");
+	    = (BOOL (WINAPI *)(HIMC, DWORD, DWORD))GetProcAddress(hLibImm, "ImmSetConversionStatus");
 
-    if (       pImmGetCompositionStringA == NULL
-	    || pImmGetCompositionStringW == NULL
+    if (       pImmGetCompositionStringW == NULL
 	    || pImmGetContext == NULL
 	    || pImmAssociateContext == NULL
 	    || pImmReleaseContext == NULL
@@ -8224,25 +8652,27 @@ gui_mch_drawsign(int row, int col, int typenr)
     static void
 close_signicon_image(signicon_t *sign)
 {
-    if (sign)
-	switch (sign->uType)
-	{
-	    case IMAGE_BITMAP:
-		DeleteObject((HGDIOBJ)sign->hImage);
-		break;
-	    case IMAGE_CURSOR:
-		DestroyCursor((HCURSOR)sign->hImage);
-		break;
-	    case IMAGE_ICON:
-		DestroyIcon((HICON)sign->hImage);
-		break;
+    if (sign == NULL)
+	return;
+
+    switch (sign->uType)
+    {
+	case IMAGE_BITMAP:
+	    DeleteObject((HGDIOBJ)sign->hImage);
+	    break;
+	case IMAGE_CURSOR:
+	    DestroyCursor((HCURSOR)sign->hImage);
+	    break;
+	case IMAGE_ICON:
+	    DestroyIcon((HICON)sign->hImage);
+	    break;
 # ifdef FEAT_XPM_W32
-	    case IMAGE_XPM:
-		DeleteObject((HBITMAP)sign->hImage);
-		DeleteObject((HBITMAP)sign->hShape);
-		break;
+	case IMAGE_XPM:
+	    DeleteObject((HBITMAP)sign->hImage);
+	    DeleteObject((HBITMAP)sign->hShape);
+	    break;
 # endif
-	}
+    }
 }
 
     void *
@@ -8288,7 +8718,7 @@ gui_mch_register_sign(char_u *signfile)
     {
 	if (sign.hImage)
 	    close_signicon_image(&sign);
-	emsg(_(e_signdata));
+	emsg(_(e_couldnt_read_in_sign_data));
     }
     return (void *)psign;
 
@@ -8297,11 +8727,11 @@ gui_mch_register_sign(char_u *signfile)
     void
 gui_mch_destroy_sign(void *sign)
 {
-    if (sign)
-    {
-	close_signicon_image((signicon_t *)sign);
-	vim_free(sign);
-    }
+    if (sign == NULL)
+	return;
+
+    close_signicon_image((signicon_t *)sign);
+    vim_free(sign);
 }
 #endif
 
@@ -8328,89 +8758,13 @@ gui_mch_destroy_sign(void *sign)
  * 5) WM_NOTIFY:TTN_POP destroys created tooltip
  */
 
-/*
- * determine whether installed Common Controls support multiline tooltips
- * (i.e. their version is >= 4.70
- */
-    int
-multiline_balloon_available(void)
-{
-    HINSTANCE hDll;
-    static char comctl_dll[] = "comctl32.dll";
-    static int multiline_tip = MAYBE;
-
-    if (multiline_tip != MAYBE)
-	return multiline_tip;
-
-    hDll = GetModuleHandle(comctl_dll);
-    if (hDll != NULL)
-    {
-	DLLGETVERSIONPROC pGetVer;
-	pGetVer = (DLLGETVERSIONPROC)GetProcAddress(hDll, "DllGetVersion");
-
-	if (pGetVer != NULL)
-	{
-	    DLLVERSIONINFO dvi;
-	    HRESULT hr;
-
-	    ZeroMemory(&dvi, sizeof(dvi));
-	    dvi.cbSize = sizeof(dvi);
-
-	    hr = (*pGetVer)(&dvi);
-
-	    if (SUCCEEDED(hr)
-		    && (dvi.dwMajorVersion > 4
-			|| (dvi.dwMajorVersion == 4
-						&& dvi.dwMinorVersion >= 70)))
-	    {
-		multiline_tip = TRUE;
-		return multiline_tip;
-	    }
-	}
-	else
-	{
-	    // there is chance we have ancient CommCtl 4.70
-	    // which doesn't export DllGetVersion
-	    DWORD dwHandle = 0;
-	    DWORD len = GetFileVersionInfoSize(comctl_dll, &dwHandle);
-	    if (len > 0)
-	    {
-		VS_FIXEDFILEINFO *ver;
-		UINT vlen = 0;
-		void *data = alloc(len);
-
-		if ((data != NULL
-			&& GetFileVersionInfo(comctl_dll, 0, len, data)
-			&& VerQueryValue(data, "\\", (void **)&ver, &vlen)
-			&& vlen
-			&& HIWORD(ver->dwFileVersionMS) > 4)
-			|| ((HIWORD(ver->dwFileVersionMS) == 4
-			    && LOWORD(ver->dwFileVersionMS) >= 70)))
-		{
-		    vim_free(data);
-		    multiline_tip = TRUE;
-		    return multiline_tip;
-		}
-		vim_free(data);
-	    }
-	}
-    }
-    multiline_tip = FALSE;
-    return multiline_tip;
-}
-
     static void
 make_tooltip(BalloonEval *beval, char *text, POINT pt)
 {
     TOOLINFOW	*pti;
-    int		ToolInfoSize;
+    RECT	rect;
 
-    if (multiline_balloon_available() == TRUE)
-	ToolInfoSize = sizeof(TOOLINFOW_NEW);
-    else
-	ToolInfoSize = sizeof(TOOLINFOW);
-
-    pti = alloc(ToolInfoSize);
+    pti = ALLOC_ONE(TOOLINFOW);
     if (pti == NULL)
 	return;
 
@@ -8422,30 +8776,19 @@ make_tooltip(BalloonEval *beval, char *text, POINT pt)
     SetWindowPos(beval->balloon, HWND_TOPMOST, 0, 0, 0, 0,
 	    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
-    pti->cbSize = ToolInfoSize;
+    pti->cbSize = sizeof(TOOLINFOW);
     pti->uFlags = TTF_SUBCLASS;
     pti->hwnd = beval->target;
     pti->hinst = 0; // Don't use string resources
     pti->uId = ID_BEVAL_TOOLTIP;
 
-    if (multiline_balloon_available() == TRUE)
-    {
-	RECT rect;
-	TOOLINFOW_NEW *ptin = (TOOLINFOW_NEW *)pti;
-	pti->lpszText = LPSTR_TEXTCALLBACKW;
-	beval->tofree = enc_to_utf16((char_u*)text, NULL);
-	ptin->lParam = (LPARAM)beval->tofree;
-	// switch multiline tooltips on
-	if (GetClientRect(s_textArea, &rect))
-	    SendMessageW(beval->balloon, TTM_SETMAXTIPWIDTH, 0,
-		    (LPARAM)rect.right);
-    }
-    else
-    {
-	// do this old way
-	beval->tofree = enc_to_utf16((char_u*)text, NULL);
-	pti->lpszText = (LPWSTR)beval->tofree;
-    }
+    pti->lpszText = LPSTR_TEXTCALLBACKW;
+    beval->tofree = enc_to_utf16((char_u*)text, NULL);
+    pti->lParam = (LPARAM)beval->tofree;
+    // switch multiline tooltips on
+    if (GetClientRect(s_textArea, &rect))
+	SendMessageW(beval->balloon, TTM_SETMAXTIPWIDTH, 0,
+		(LPARAM)rect.right);
 
     // Limit ballooneval bounding rect to CursorPos neighbourhood.
     pti->rect.left = pt.x - 3;
@@ -8476,10 +8819,10 @@ delete_tooltip(BalloonEval *beval)
 }
 
     static VOID CALLBACK
-BevalTimerProc(
+beval_timer_proc(
     HWND	hwnd UNUSED,
     UINT	uMsg UNUSED,
-    UINT_PTR    idEvent UNUSED,
+    UINT_PTR	idEvent UNUSED,
     DWORD	dwTime)
 {
     POINT	pt;
@@ -8497,8 +8840,8 @@ BevalTimerProc(
     if (!PtInRect(&rect, pt))
 	return;
 
-    if (LastActivity > 0
-	    && (dwTime - LastActivity) >= (DWORD)p_bdlay
+    if (last_user_activity > 0
+	    && (dwTime - last_user_activity) >= (DWORD)p_bdlay
 	    && (cur_beval->showState != ShS_PENDING
 		|| abs(cur_beval->x - pt.x) > 3
 		|| abs(cur_beval->y - pt.y) > 3))
@@ -8509,8 +8852,6 @@ BevalTimerProc(
 	cur_beval->x = pt.x;
 	cur_beval->y = pt.y;
 
-	// TRACE0("BevalTimerProc: sending request");
-
 	if (cur_beval->msgCB != NULL)
 	    (*cur_beval->msgCB)(cur_beval, 0);
     }
@@ -8519,20 +8860,16 @@ BevalTimerProc(
     void
 gui_mch_disable_beval_area(BalloonEval *beval UNUSED)
 {
-    // TRACE0("gui_mch_disable_beval_area {{{");
-    KillTimer(s_textArea, BevalTimerId);
-    // TRACE0("gui_mch_disable_beval_area }}}");
+    KillTimer(s_textArea, beval_timer_id);
 }
 
     void
 gui_mch_enable_beval_area(BalloonEval *beval)
 {
-    // TRACE0("gui_mch_enable_beval_area |||");
     if (beval == NULL)
 	return;
-    // TRACE0("gui_mch_enable_beval_area {{{");
-    BevalTimerId = SetTimer(s_textArea, 0, (UINT)(p_bdlay / 2), BevalTimerProc);
-    // TRACE0("gui_mch_enable_beval_area }}}");
+    beval_timer_id = SetTimer(s_textArea, 0, (UINT)(p_bdlay / 2),
+							     beval_timer_proc);
 }
 
     void
@@ -8549,7 +8886,6 @@ gui_mch_post_balloon(BalloonEval *beval, char_u *mesg)
 	return;
     }
 
-    // TRACE0("gui_mch_post_balloon {{{");
     if (beval->showState == ShS_SHOWING)
 	return;
     GetCursorPos(&pt);
@@ -8562,7 +8898,6 @@ gui_mch_post_balloon(BalloonEval *beval, char_u *mesg)
 	beval->showState = ShS_SHOWING;
 	make_tooltip(beval, (char *)mesg, pt);
     }
-    // TRACE0("gui_mch_post_balloon }}}");
 }
 
     BalloonEval *
@@ -8577,7 +8912,7 @@ gui_mch_create_beval_area(
 
     if (mesg != NULL && mesgCB != NULL)
     {
-	iemsg(_("E232: Cannot create BalloonEval with both message and callback"));
+	iemsg(e_cannot_create_ballooneval_with_both_message_and_callback);
 	return NULL;
     }
 
@@ -8606,26 +8941,23 @@ Handle_WM_Notify(HWND hwnd UNUSED, LPNMHDR pnmh)
     if (pnmh->idFrom != ID_BEVAL_TOOLTIP) // it is not our tooltip
 	return;
 
-    if (cur_beval != NULL)
+    if (cur_beval == NULL)
+	return;
+
+    switch (pnmh->code)
     {
-	switch (pnmh->code)
-	{
 	case TTN_SHOW:
-	    // TRACE0("TTN_SHOW {{{");
-	    // TRACE0("TTN_SHOW }}}");
 	    break;
 	case TTN_POP: // Before tooltip disappear
-	    // TRACE0("TTN_POP {{{");
 	    delete_tooltip(cur_beval);
 	    gui_mch_enable_beval_area(cur_beval);
-	    // TRACE0("TTN_POP }}}");
 
 	    cur_beval->showState = ShS_NEUTRAL;
 	    break;
 	case TTN_GETDISPINFO:
 	    {
 		// if you get there then we have new common controls
-		NMTTDISPINFO_NEW *info = (NMTTDISPINFO_NEW *)pnmh;
+		NMTTDISPINFO *info = (NMTTDISPINFO *)pnmh;
 		info->lpszText = (LPSTR)info->lParam;
 		info->uFlags |= TTF_DI_SETITEM;
 	    }
@@ -8633,21 +8965,20 @@ Handle_WM_Notify(HWND hwnd UNUSED, LPNMHDR pnmh)
 	case TTN_GETDISPINFOW:
 	    {
 		// if we get here then we have new common controls
-		NMTTDISPINFOW_NEW *info = (NMTTDISPINFOW_NEW *)pnmh;
+		NMTTDISPINFOW *info = (NMTTDISPINFOW *)pnmh;
 		info->lpszText = (LPWSTR)info->lParam;
 		info->uFlags |= TTF_DI_SETITEM;
 	    }
 	    break;
-	}
     }
 }
 
     static void
-TrackUserActivity(UINT uMsg)
+track_user_activity(UINT uMsg)
 {
     if ((uMsg >= WM_MOUSEFIRST && uMsg <= WM_MOUSELAST)
 	    || (uMsg >= WM_KEYFIRST && uMsg <= WM_KEYLAST))
-	LastActivity = GetTickCount();
+	last_user_activity = GetTickCount();
 }
 
     void
@@ -8694,5 +9025,219 @@ netbeans_draw_multisign_indicator(int row)
     SetPixel(s_hdc, x+2, y, gui.currFgColor);
     SetPixel(s_hdc, x+3, y++, gui.currFgColor);
     SetPixel(s_hdc, x+2, y, gui.currFgColor);
+}
+#endif
+
+#if defined(FEAT_EVAL) || defined(PROTO)
+
+// TODO: at the moment, this is just a copy of test_gui_mouse_event.
+// But, we could instead generate actual Win32 mouse event messages,
+// ie. to make it consistent with test_gui_w32_sendevent_keyboard.
+    static int
+test_gui_w32_sendevent_mouse(dict_T *args)
+{
+    if (!dict_has_key(args, "row") || !dict_has_key(args, "col"))
+	return FALSE;
+
+    // Note: "move" is optional, requires fewer arguments
+    int move = (int)dict_get_bool(args, "move", FALSE);
+
+    if (!move && (!dict_has_key(args, "button")
+	    || !dict_has_key(args, "multiclick")
+	    || !dict_has_key(args, "modifiers")))
+	return FALSE;
+
+    int row = (int)dict_get_number(args, "row");
+    int col = (int)dict_get_number(args, "col");
+
+    if (move)
+    {
+	// the "move" argument expects row and col coordnates to be in pixels,
+	// unless "cell" is specified and is TRUE.
+	if (dict_get_bool(args, "cell", FALSE))
+	{
+	    // calculate the middle of the character cell
+	    // Note: Cell coordinates are 1-based from vimscript
+	    int pY = (row - 1) * gui.char_height + gui.char_height / 2;
+	    int pX = (col - 1) * gui.char_width + gui.char_width / 2;
+	    gui_mouse_moved(pX, pY);
+	}
+	else
+	    gui_mouse_moved(col, row);
+    }
+    else
+    {
+	int button = (int)dict_get_number(args, "button");
+	int repeated_click = (int)dict_get_number(args, "multiclick");
+	int_u mods = (int)dict_get_number(args, "modifiers");
+
+	// Reset the scroll values to known values.
+	// XXX: Remove this when/if the scroll step is made configurable.
+	mouse_set_hor_scroll_step(6);
+	mouse_set_vert_scroll_step(3);
+
+	gui_send_mouse_event(button, TEXT_X(col - 1), TEXT_Y(row - 1),
+							repeated_click, mods);
+    }
+    return TRUE;
+}
+
+    static int
+test_gui_w32_sendevent_keyboard(dict_T *args)
+{
+    INPUT inputs[1];
+    INPUT modkeys[3];
+    SecureZeroMemory(inputs, sizeof(INPUT));
+    SecureZeroMemory(modkeys, 3 * sizeof(INPUT));
+
+    char_u *event = dict_get_string(args, "event", TRUE);
+
+    if (event && (STRICMP(event, "keydown") == 0
+				      || STRICMP(event, "keyup") == 0))
+    {
+	WORD vkCode = dict_get_number_def(args, "keycode", 0);
+	if (vkCode <= 0 || vkCode >= 0xFF)
+	{
+	    semsg(_(e_invalid_argument_nr), (long)vkCode);
+	    return FALSE;
+	}
+
+	BOOL isModKey = (vkCode == VK_SHIFT || vkCode == VK_CONTROL
+	    || vkCode == VK_MENU || vkCode == VK_LSHIFT || vkCode == VK_RSHIFT
+	    || vkCode == VK_LCONTROL || vkCode == VK_RCONTROL
+	    || vkCode == VK_LMENU || vkCode == VK_RMENU );
+
+	BOOL unwrapMods = FALSE;
+	int mods = (int)dict_get_number(args, "modifiers");
+
+	// If there are modifiers in the args, and it is not a keyup event and
+	// vkCode is not a modifier key, then we generate virtual modifier key
+	// messages before sending the actual key message.
+	if (mods && STRICMP(event, "keydown") == 0 && !isModKey)
+	{
+	    int n = 0;
+	    if (mods & MOD_MASK_SHIFT)
+	    {
+		modkeys[n].type = INPUT_KEYBOARD;
+		modkeys[n].ki.wVk = VK_LSHIFT;
+		n++;
+	    }
+	    if (mods & MOD_MASK_CTRL)
+	    {
+		modkeys[n].type = INPUT_KEYBOARD;
+		modkeys[n].ki.wVk = VK_LCONTROL;
+		n++;
+	    }
+	    if (mods & MOD_MASK_ALT)
+	    {
+		modkeys[n].type = INPUT_KEYBOARD;
+		modkeys[n].ki.wVk = VK_LMENU;
+		n++;
+	    }
+	    if (n)
+	    {
+		(void)SetForegroundWindow(s_hwnd);
+		SendInput(n, modkeys, sizeof(INPUT));
+	    }
+	}
+
+	inputs[0].type = INPUT_KEYBOARD;
+	inputs[0].ki.wVk = vkCode;
+	if (STRICMP(event, "keyup") == 0)
+	{
+	    inputs[0].ki.dwFlags = KEYEVENTF_KEYUP;
+	    if (!isModKey)
+		unwrapMods = TRUE;
+	}
+
+	(void)SetForegroundWindow(s_hwnd);
+	SendInput(ARRAYSIZE(inputs), inputs, sizeof(INPUT));
+	vim_free(event);
+
+	if (unwrapMods)
+	{
+	    modkeys[0].type = INPUT_KEYBOARD;
+	    modkeys[0].ki.wVk = VK_LSHIFT;
+	    modkeys[0].ki.dwFlags = KEYEVENTF_KEYUP;
+
+	    modkeys[1].type = INPUT_KEYBOARD;
+	    modkeys[1].ki.wVk = VK_LCONTROL;
+	    modkeys[1].ki.dwFlags = KEYEVENTF_KEYUP;
+
+	    modkeys[2].type = INPUT_KEYBOARD;
+	    modkeys[2].ki.wVk = VK_LMENU;
+	    modkeys[2].ki.dwFlags = KEYEVENTF_KEYUP;
+
+	    (void)SetForegroundWindow(s_hwnd);
+	    SendInput(3, modkeys, sizeof(INPUT));
+	}
+    }
+    else
+    {
+	if (event == NULL)
+	{
+	    semsg(_(e_missing_argument_str), "event");
+	}
+	else
+	{
+	    semsg(_(e_invalid_value_for_argument_str_str), "event", event);
+	    vim_free(event);
+	}
+	return FALSE;
+    }
+    return TRUE;
+}
+
+    static int
+test_gui_w32_sendevent_set_keycode_trans_strategy(dict_T *args)
+{
+    int handled = 0;
+    char_u *strategy = dict_get_string(args, "strategy", TRUE);
+
+    if (strategy)
+    {
+	if (STRICMP(strategy, "classic") == 0)
+	{
+	    handled = 1;
+	    keycode_trans_strategy_used = &keycode_trans_strategy_classic;
+	}
+	else if (STRICMP(strategy, "experimental") == 0)
+	{
+	    handled = 1;
+	    keycode_trans_strategy_used = &keycode_trans_strategy_experimental;
+	}
+    }
+
+    if (!handled)
+    {
+	if (strategy == NULL)
+	{
+	    semsg(_(e_missing_argument_str), "strategy");
+	}
+	else
+	{
+	    semsg(_(e_invalid_value_for_argument_str_str), "strategy", strategy);
+	    vim_free(strategy);
+	}
+	return FALSE;
+    }
+    return TRUE;
+}
+
+
+    int
+test_gui_w32_sendevent(char_u *event, dict_T *args)
+{
+    if (STRICMP(event, "key") == 0)
+	return test_gui_w32_sendevent_keyboard(args);
+    else if (STRICMP(event, "mouse") == 0)
+	return test_gui_w32_sendevent_mouse(args);
+    else if (STRICMP(event, "set_keycode_trans_strategy") == 0)
+	return test_gui_w32_sendevent_set_keycode_trans_strategy(args);
+    else
+    {
+	semsg(_(e_invalid_value_for_argument_str_str), "event", event);
+	return FALSE;
+    }
 }
 #endif

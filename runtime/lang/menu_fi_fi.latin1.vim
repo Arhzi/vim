@@ -1,6 +1,7 @@
 " Menu Translations:	Finnish
 " Maintainer:		Flammie Pirinen <flammie@iki.fi>
 " Last Change:		2020 Apr 23
+" Original translations
 
 " Quit when menu translations have already been done.
 if exists("did_menu_trans")
@@ -21,7 +22,7 @@ menutrans &File				&Tiedosto
 " Accels: AJTUSNIDPOE
 menutrans &Open\.\.\.<Tab>:e			&Avaa\.\.\.<Tab>:e
 menutrans Sp&lit-Open\.\.\.<Tab>:sp		Avaa\ &jaettuna\.\.\.<Tab>:sp
-menutrans Open\ Tab\.\.\.<Tab>:tabnew		Avaa\ &tabissa\.\.\.<Tab>:tabnew
+menutrans Open\ &Tab\.\.\.<Tab>:tabnew		Avaa\ &tabissa\.\.\.<Tab>:tabnew
 menutrans &New<Tab>:enew			&Uusi<Tab>:enew
 menutrans &Close<Tab>:close			&Sulje<Tab>:close
 " -SEP1-

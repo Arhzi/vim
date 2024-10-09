@@ -2,8 +2,7 @@
 " Language:		Ruby
 " Maintainer:		Mark Guzman <segfault@hasno.info>
 " URL:			https://github.com/vim-ruby/vim-ruby
-" Release Coordinator:	Doug Kearns <dougkearns@gmail.com>
-" Last Change:		2019 Feb 25
+" Last Change:		2023 Dec 31
 " ----------------------------------------------------------------------------
 "
 " Ruby IRB/Complete author: Keiju ISHITSUKA(keiju@ishitsuka.com)
@@ -490,7 +489,7 @@ class VimRubyCompletion
         trail = "%s%s" % [ dir, sub ]
         tcfg = "%sconfig" % trail
 
-        if File.exists?( tcfg )
+        if File.exist?( tcfg )
           rails_base = trail
           break
         end
@@ -501,14 +500,9 @@ class VimRubyCompletion
     return if rails_base == nil
     $:.push rails_base unless $:.index( rails_base )
 
-    rails_config = rails_base + "config/"
-    rails_lib = rails_base + "lib/"
-    $:.push rails_config unless $:.index( rails_config )
-    $:.push rails_lib unless $:.index( rails_lib )
-
-    bootfile = rails_config + "boot.rb"
-    envfile = rails_config + "environment.rb"
-    if File.exists?( bootfile ) && File.exists?( envfile )
+    bootfile = rails_base + "config/boot.rb"
+    envfile = rails_base + "config/environment.rb"
+    if File.exist?( bootfile ) && File.exist?( envfile )
       begin
         require bootfile
         require envfile

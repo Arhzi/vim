@@ -5,6 +5,7 @@
 
 source check.vim
 source shared.vim
+import './vim9.vim' as v9
 
 func Table(title, ...)
   let ret = a:title
@@ -88,7 +89,7 @@ func Test_user_func()
 
   " Try to overwrite a function in the global (g:) scope
   call assert_equal(3, max([1, 2, 3]))
-  call assert_fails("call extend(g:, {'max': function('min')})", 'E704')
+  call assert_fails("call extend(g:, {'max': function('min')})", 'E704:')
   call assert_equal(3, max([1, 2, 3]))
 
   " Try to overwrite an user defined function with a function reference
@@ -128,11 +129,9 @@ func MakeBadFunc()
 endfunc
 
 func Test_default_arg()
-  if has('float')
-    call assert_equal(1.0, Log(10))
-    call assert_equal(log(10), Log(10, exp(1)))
-    call assert_fails("call Log(1,2,3)", 'E118')
-  endif
+  call assert_equal(1.0, Log(10))
+  call assert_equal(log(10), Log(10, exp(1)))
+  call assert_fails("call Log(1,2,3)", 'E118:')
 
   let res = Args(1)
   call assert_equal(res.mandatory, 1)
@@ -149,8 +148,8 @@ func Test_default_arg()
   call assert_equal(res.optional, 2)
   call assert_equal(res['0'], 1)
 
-  call assert_fails("call MakeBadFunc()", 'E989')
-  call assert_fails("fu F(a=1 ,) | endf", 'E475')
+  call assert_fails("call MakeBadFunc()", 'E989:')
+  call assert_fails("fu F(a=1 ,) | endf", 'E1068:')
 
   let d = Args2(7, v:none, 9)
   call assert_equal([7, 2, 9], [d.a, d.b, d.c])
@@ -160,6 +159,16 @@ func Test_default_arg()
 	\ .. "1    return deepcopy(a:)\n"
 	\ .. "   endfunction",
 	\ execute('func Args2'))
+
+  " Error in default argument expression
+  let l =<< trim END
+    func F1(x = y)
+      return a:x * 2
+    endfunc
+    echo F1()
+  END
+  let @a = l->join("\n")
+  call assert_fails("exe @a", 'E121:')
 endfunc
 
 func s:addFoo(lead)
@@ -168,6 +177,60 @@ endfunc
 
 func Test_user_method()
   eval 'bar'->s:addFoo()->assert_equal('barfoo')
+endfunc
+
+func Test_method_with_linebreaks()
+  let lines =<< trim END
+      vim9script
+
+      export def Scan(ll: list<number>): func(func(number))
+        return (Emit: func(number)) => {
+          for v in ll
+            Emit(v)
+          endfor
+        }
+      enddef
+
+      export def Build(Cont: func(func(number))): list<number>
+        var result: list<number> = []
+        Cont((v) => {
+            add(result, v)
+        })
+        return result
+      enddef
+
+      export def Noop(Cont: func(func(number))): func(func(number))
+        return (Emit: func(number)) => {
+          Cont(Emit)
+        }
+      enddef
+  END
+  call writefile(lines, 'Xlib.vim', 'D')
+
+  let lines =<< trim END
+      vim9script
+
+      import "./Xlib.vim" as lib
+
+      const x = [1, 2, 3]
+
+      var result = lib.Scan(x)->lib.Noop()->lib.Build()
+      assert_equal([1, 2, 3], result)
+
+      result = lib.Scan(x)->lib.Noop()
+              ->lib.Build()
+      assert_equal([1, 2, 3], result)
+
+      result = lib.Scan(x)
+            ->lib.Noop()->lib.Build()
+      assert_equal([1, 2, 3], result)
+
+      result = lib.Scan(x)
+                ->lib.Noop()
+                ->lib.Build()
+      assert_equal([1, 2, 3], result)
+  END
+  call v9.CheckScriptSuccess(lines)
 endfunc
 
 func Test_failed_call_in_try()
@@ -219,6 +282,17 @@ func Test_endfunction_trailing()
   exe "func Xtest()\necho 'hello'\nendfunc garbage"
   call assert_match('W22:', split(execute('1messages'), "\n")[0])
   call assert_true(exists('*Xtest'))
+  delfunc Xtest
+  set verbose=0
+
+  func Xtest(a1, a2)
+    echo a:a1 .. a:a2
+  endfunc
+  set verbose=15
+  redir @a
+  call Xtest(123, repeat('x', 100))
+  redir END
+  call assert_match('calling Xtest(123, ''xxxxxxx.*x\.\.\.x.*xxxx'')', getreg('a'))
   delfunc Xtest
   set verbose=0
 
@@ -283,7 +357,7 @@ func Test_function_defined_line()
   qall!
   [CODE]
 
-  call writefile(lines, 'Xtest.vim')
+  call writefile(lines, 'Xtest.vim', 'D')
   let res = system(GetVimCommandClean() .. ' -es -X -S Xtest.vim')
   call assert_equal(0, v:shell_error)
 
@@ -304,8 +378,6 @@ func Test_function_defined_line()
 
   let m = matchstr(res, 'function F6()[^[:print:]]*[[:print:]]*')
   call assert_match(' line 23$', m)
-
-  call delete('Xtest.vim')
 endfunc
 
 " Test for defining a function reference in the global scope
@@ -360,12 +432,11 @@ func Test_script_local_func()
     :qall
 
   [CODE]
-  call writefile(lines, 'Xscript')
+  call writefile(lines, 'Xscript', 'D')
   if RunVim([], [], '-s Xscript')
     call assert_equal([], readfile('Xresult'))
   endif
   call delete('Xresult')
-  call delete('Xscript')
 endfunc
 
 " Test for errors in defining new functions
@@ -394,25 +465,37 @@ func Test_func_def_error()
   let l = join(lines, "\n") . "\n"
   exe l
   call assert_fails('exe l', 'E717:')
+  call assert_fails('call feedkeys(":func d.F1()\<CR>", "xt")', 'E717:')
 
   " Define an autoload function with an incorrect file name
-  call writefile(['func foo#Bar()', 'return 1', 'endfunc'], 'Xscript')
+  call writefile(['func foo#Bar()', 'return 1', 'endfunc'], 'Xscript', 'D')
   call assert_fails('source Xscript', 'E746:')
-  call delete('Xscript')
+
+  " Try to list functions using an invalid search pattern
+  call assert_fails('function /\%(/', 'E53:')
 endfunc
 
 " Test for deleting a function
 func Test_del_func()
-  call assert_fails('delfunction Xabc', 'E130:')
+  call assert_fails('delfunction Xabc', 'E117:')
   let d = {'a' : 10}
   call assert_fails('delfunc d.a', 'E718:')
+  func d.fn()
+    return 1
+  endfunc
+
+  " cannot delete the dict function by number
+  let nr = substitute(execute('echo d'), '.*function(''\(\d\+\)'').*', '\1', '')
+  call assert_fails('delfunction g:' .. nr, 'E475: Invalid argument: g:')
+
+  delfunc d.fn
+  call assert_equal({'a' : 10}, d)
 endfunc
 
 " Test for calling return outside of a function
 func Test_return_outside_func()
-  call writefile(['return 10'], 'Xscript')
+  call writefile(['return 10'], 'Xscript', 'D')
   call assert_fails('source Xscript', 'E133:')
-  call delete('Xscript')
 endfunc
 
 " Test for errors in calling a function
@@ -429,6 +512,479 @@ func Test_func_arg_error()
   endfunc
   call assert_fails('call Xfunc()', 'E725:')
   delfunc Xfunc
+endfunc
+
+func Test_func_dict()
+  let mydict = {'a': 'b'}
+  function mydict.somefunc() dict
+    return len(self)
+  endfunc
+
+  call assert_equal("{'a': 'b', 'somefunc': function('3')}", string(mydict))
+  call assert_equal(2, mydict.somefunc())
+  call assert_match("^\n   function \\d\\\+() dict"
+  \              .. "\n1      return len(self)"
+  \              .. "\n   endfunction$", execute('func mydict.somefunc'))
+  call assert_fails('call mydict.nonexist()', 'E716:')
+endfunc
+
+func Test_func_range()
+  new
+  call setline(1, range(1, 8))
+  func FuncRange() range
+    echo a:firstline
+    echo a:lastline
+  endfunc
+  3
+  call assert_equal("\n3\n3", execute('call FuncRange()'))
+  call assert_equal("\n4\n6", execute('4,6 call FuncRange()'))
+  call assert_equal("\n   function FuncRange() range"
+  \              .. "\n1      echo a:firstline"
+  \              .. "\n2      echo a:lastline"
+  \              .. "\n   endfunction",
+  \                 execute('function FuncRange'))
+
+  bwipe!
+endfunc
+
+" Test for memory allocation failure when defining a new function
+func Test_funcdef_alloc_failure()
+  new
+  let lines =<< trim END
+    func Xtestfunc()
+      return 321
+    endfunc
+  END
+  call setline(1, lines)
+  call test_alloc_fail(GetAllocId('get_func'), 0, 0)
+  call assert_fails('source', 'E342:')
+  call assert_false(exists('*Xtestfunc'))
+  call assert_fails('delfunc Xtestfunc', 'E117:')
+  %d _
+  let lines =<< trim END
+    def g:Xvim9func(): number
+      return 456
+    enddef
+  END
+  call setline(1, lines)
+  call test_alloc_fail(GetAllocId('get_func'), 0, 0)
+  call assert_fails('source', 'E342:')
+  call assert_false(exists('*Xvim9func'))
+  "call test_alloc_fail(GetAllocId('get_func'), 0, 0)
+  "call assert_fails('source', 'E342:')
+  "call assert_false(exists('*Xtestfunc'))
+  "call assert_fails('delfunc Xtestfunc', 'E117:')
+  bw!
+endfunc
+
+func AddDefer(arg1, ...)
+  call extend(g:deferred, [a:arg1])
+  if a:0 == 1
+    call extend(g:deferred, [a:1])
+  endif
+endfunc
+
+func WithDeferTwo()
+  call extend(g:deferred, ['in Two'])
+  for nr in range(3)
+    defer AddDefer('Two' .. nr)
+  endfor
+  call extend(g:deferred, ['end Two'])
+endfunc
+
+func WithDeferOne()
+  call extend(g:deferred, ['in One'])
+  call writefile(['text'], 'Xfuncdefer')
+  defer delete('Xfuncdefer')
+  defer AddDefer('One')
+  call WithDeferTwo()
+  call extend(g:deferred, ['end One'])
+endfunc
+
+func WithPartialDefer()
+  call extend(g:deferred, ['in Partial'])
+  let Part = funcref('AddDefer', ['arg1'])
+  defer Part("arg2")
+  call extend(g:deferred, ['end Partial'])
+endfunc
+
+func Test_defer()
+  let g:deferred = []
+  call WithDeferOne()
+
+  call assert_equal(['in One', 'in Two', 'end Two', 'Two2', 'Two1', 'Two0', 'end One', 'One'], g:deferred)
+  unlet g:deferred
+
+  call assert_equal('', glob('Xfuncdefer'))
+
+  call assert_fails('defer delete("Xfuncdefer")->Another()', 'E488:')
+  call assert_fails('defer delete("Xfuncdefer").member', 'E488:')
+
+  let g:deferred = []
+  call WithPartialDefer()
+  call assert_equal(['in Partial', 'end Partial', 'arg1', 'arg2'], g:deferred)
+  unlet g:deferred
+
+  let Part = funcref('AddDefer', ['arg1'], {})
+  call assert_fails('defer Part("arg2")', 'E1300:')
+endfunc
+
+func DeferLevelTwo()
+  call writefile(['text'], 'XDeleteTwo', 'D')
+  throw 'someerror'
+endfunc
+
+def DeferLevelOne()
+  call writefile(['text'], 'XDeleteOne', 'D')
+  call g:DeferLevelTwo()
+enddef
+
+func Test_defer_throw()
+  let caught = 'no'
+  try
+    call DeferLevelOne()
+  catch /someerror/
+    let caught = 'yes'
+  endtry
+  call assert_equal('yes', caught)
+  call assert_false(filereadable('XDeleteOne'))
+  call assert_false(filereadable('XDeleteTwo'))
+endfunc
+
+func Test_defer_quitall_func()
+  let lines =<< trim END
+      func DeferLevelTwo()
+        call writefile(['text'], 'XQuitallFuncTwo', 'D')
+        call writefile(['quit'], 'XQuitallFuncThree', 'a')
+        qa!
+      endfunc
+
+      func DeferLevelOne()
+        call writefile(['text'], 'XQuitalFunclOne', 'D')
+        defer DeferLevelTwo()
+      endfunc
+
+      call DeferLevelOne()
+  END
+  call writefile(lines, 'XdeferQuitallFunc', 'D')
+  call system(GetVimCommand() .. ' -X -S XdeferQuitallFunc')
+  call assert_equal(0, v:shell_error)
+  call assert_false(filereadable('XQuitallFuncOne'))
+  call assert_false(filereadable('XQuitallFuncTwo'))
+  call assert_equal(['quit'], readfile('XQuitallFuncThree'))
+
+  call delete('XQuitallFuncThree')
+endfunc
+
+func Test_defer_quitall_def()
+  let lines =<< trim END
+      vim9script
+      def DeferLevelTwo()
+        call writefile(['text'], 'XQuitallDefTwo', 'D')
+        call writefile(['quit'], 'XQuitallDefThree', 'a')
+        qa!
+      enddef
+
+      def DeferLevelOne()
+        call writefile(['text'], 'XQuitallDefOne', 'D')
+        defer DeferLevelTwo()
+      enddef
+
+      DeferLevelOne()
+  END
+  call writefile(lines, 'XdeferQuitallDef', 'D')
+  call system(GetVimCommand() .. ' -X -S XdeferQuitallDef')
+  call assert_equal(0, v:shell_error)
+  call assert_false(filereadable('XQuitallDefOne'))
+  call assert_false(filereadable('XQuitallDefTwo'))
+  call assert_equal(['quit'], readfile('XQuitallDefThree'))
+
+  call delete('XQuitallDefThree')
+endfunc
+
+func Test_defer_quitall_autocmd()
+  let lines =<< trim END
+      func DeferLevelFive()
+        defer writefile(['5'], 'XQuitallAutocmd', 'a')
+        qa!
+      endfunc
+
+      autocmd User DeferAutocmdFive call DeferLevelFive()
+
+      def DeferLevelFour()
+        defer writefile(['4'], 'XQuitallAutocmd', 'a')
+        doautocmd User DeferAutocmdFive
+      enddef
+
+      func DeferLevelThree()
+        defer writefile(['3'], 'XQuitallAutocmd', 'a')
+        call DeferLevelFour()
+      endfunc
+
+      autocmd User DeferAutocmdThree ++nested call DeferLevelThree()
+
+      def DeferLevelTwo()
+        defer writefile(['2'], 'XQuitallAutocmd', 'a')
+        doautocmd User DeferAutocmdThree
+      enddef
+
+      func DeferLevelOne()
+        defer writefile(['1'], 'XQuitallAutocmd', 'a')
+        call DeferLevelTwo()
+      endfunc
+
+      autocmd User DeferAutocmdOne ++nested call DeferLevelOne()
+
+      doautocmd User DeferAutocmdOne
+  END
+  call writefile(lines, 'XdeferQuitallAutocmd', 'D')
+  call system(GetVimCommand() .. ' -X -S XdeferQuitallAutocmd')
+  call assert_equal(0, v:shell_error)
+  call assert_equal(['5', '4', '3', '2', '1'], readfile('XQuitallAutocmd'))
+
+  call delete('XQuitallAutocmd')
+endfunc
+
+func Test_defer_quitall_in_expr_func()
+  let lines =<< trim END
+      def DefIndex(idx: number, val: string): bool
+        call writefile([idx .. ': ' .. val], 'Xentry' .. idx, 'D')
+        if val == 'b'
+          qa!
+        endif
+        return val == 'c'
+      enddef
+
+      def Test_defer_in_funcref()
+        assert_equal(2, indexof(['a', 'b', 'c'], funcref('g:DefIndex')))
+      enddef
+      call Test_defer_in_funcref()
+  END
+  call writefile(lines, 'XdeferQuitallExpr', 'D')
+  call system(GetVimCommand() .. ' -X -S XdeferQuitallExpr')
+  call assert_equal(0, v:shell_error)
+  call assert_false(filereadable('Xentry0'))
+  call assert_false(filereadable('Xentry1'))
+  call assert_false(filereadable('Xentry2'))
+endfunc
+
+func FuncIndex(idx, val)
+  call writefile([a:idx .. ': ' .. a:val], 'Xentry' .. a:idx, 'D')
+  return a:val == 'c'
+endfunc
+
+def DefIndex(idx: number, val: string): bool
+  call writefile([idx .. ': ' .. val], 'Xentry' .. idx, 'D')
+  return val == 'c'
+enddef
+
+def DefIndexXtra(xtra: string, idx: number, val: string): bool
+  call writefile([idx .. ': ' .. val], 'Xentry' .. idx, 'D')
+  return val == 'c'
+enddef
+
+def Test_defer_in_funcref()
+  assert_equal(2, indexof(['a', 'b', 'c'], function('g:FuncIndex')))
+  assert_false(filereadable('Xentry0'))
+  assert_false(filereadable('Xentry1'))
+  assert_false(filereadable('Xentry2'))
+
+  assert_equal(2, indexof(['a', 'b', 'c'], g:DefIndex))
+  assert_false(filereadable('Xentry0'))
+  assert_false(filereadable('Xentry1'))
+  assert_false(filereadable('Xentry2'))
+
+  assert_equal(2, indexof(['a', 'b', 'c'], function('g:DefIndex')))
+  assert_false(filereadable('Xentry0'))
+  assert_false(filereadable('Xentry1'))
+  assert_false(filereadable('Xentry2'))
+
+  assert_equal(2, indexof(['a', 'b', 'c'], funcref(g:DefIndex)))
+  assert_false(filereadable('Xentry0'))
+  assert_false(filereadable('Xentry1'))
+  assert_false(filereadable('Xentry2'))
+
+  assert_equal(2, indexof(['a', 'b', 'c'], function(g:DefIndexXtra, ['xtra'])))
+  assert_false(filereadable('Xentry0'))
+  assert_false(filereadable('Xentry1'))
+  assert_false(filereadable('Xentry2'))
+
+  assert_equal(2, indexof(['a', 'b', 'c'], funcref(g:DefIndexXtra, ['xtra'])))
+  assert_false(filereadable('Xentry0'))
+  assert_false(filereadable('Xentry1'))
+  assert_false(filereadable('Xentry2'))
+enddef
+
+func Test_defer_wrong_arguments()
+  call assert_fails('defer delete()', 'E119:')
+  call assert_fails('defer FuncIndex(1)', 'E119:')
+  call assert_fails('defer delete(1, 2, 3)', 'E118:')
+  call assert_fails('defer FuncIndex(1, 2, 3)', 'E118:')
+
+  let lines =<< trim END
+      def DeferFunc0()
+        defer delete()
+      enddef
+      defcompile
+  END
+  call v9.CheckScriptFailure(lines, 'E119:')
+  let lines =<< trim END
+      def DeferFunc3()
+        defer delete(1, 2, 3)
+      enddef
+      defcompile
+  END
+  call v9.CheckScriptFailure(lines, 'E118:')
+  let lines =<< trim END
+      def DeferFunc2()
+        defer delete(1, 2)
+      enddef
+      defcompile
+  END
+  call v9.CheckScriptFailure(lines, 'E1013: Argument 1: type mismatch, expected string but got number')
+
+  def g:FuncOneArg(arg: string)
+    echo arg
+  enddef
+
+  let lines =<< trim END
+      def DeferUserFunc0()
+        defer g:FuncOneArg()
+      enddef
+      defcompile
+  END
+  call v9.CheckScriptFailure(lines, 'E119:')
+  let lines =<< trim END
+      def DeferUserFunc2()
+        defer g:FuncOneArg(1, 2)
+      enddef
+      defcompile
+  END
+  call v9.CheckScriptFailure(lines, 'E118:')
+  let lines =<< trim END
+      def DeferUserFunc1()
+        defer g:FuncOneArg(1)
+      enddef
+      defcompile
+  END
+  call v9.CheckScriptFailure(lines, 'E1013: Argument 1: type mismatch, expected string but got number')
+endfunc
+
+" Test for calling a deferred function after an exception
+func Test_defer_after_exception()
+  let g:callTrace = []
+  func Bar()
+    let g:callTrace += [1]
+    throw 'InnerException'
+  endfunc
+
+  func Defer()
+    let g:callTrace += [2]
+    let g:callTrace += [3]
+    try
+      call Bar()
+    catch /InnerException/
+      let g:callTrace += [4]
+    endtry
+    let g:callTrace += [5]
+    let g:callTrace += [6]
+  endfunc
+
+  func Foo()
+    defer Defer()
+    throw "TestException"
+  endfunc
+
+  try
+    call Foo()
+  catch /TestException/
+    let g:callTrace += [7]
+  endtry
+  call assert_equal([2, 3, 1, 4, 5, 6, 7], g:callTrace)
+
+  delfunc Defer
+  delfunc Foo
+  delfunc Bar
+  unlet g:callTrace
+endfunc
+
+" Test for multiple deferred function which throw exceptions.
+" Exceptions thrown by deferred functions should result in error messages but
+" not propagated into the calling functions.
+func Test_multidefer_with_exception()
+  let g:callTrace = []
+  func Except()
+    let g:callTrace += [1]
+    throw 'InnerException'
+    let g:callTrace += [2]
+  endfunc
+
+  func FirstDefer()
+    let g:callTrace += [3]
+    let g:callTrace += [4]
+  endfunc
+
+  func SecondDeferWithExcept()
+    let g:callTrace += [5]
+    call Except()
+    let g:callTrace += [6]
+  endfunc
+
+  func ThirdDefer()
+    let g:callTrace += [7]
+    let g:callTrace += [8]
+  endfunc
+
+  func Foo()
+    let g:callTrace += [9]
+    defer FirstDefer()
+    defer SecondDeferWithExcept()
+    defer ThirdDefer()
+    let g:callTrace += [10]
+  endfunc
+
+  let v:errmsg = ''
+  try
+    let g:callTrace += [11]
+    call Foo()
+    let g:callTrace += [12]
+  catch /TestException/
+    let g:callTrace += [13]
+  catch
+    let g:callTrace += [14]
+  finally
+    let g:callTrace += [15]
+  endtry
+  let g:callTrace += [16]
+
+  call assert_equal('E605: Exception not caught: InnerException', v:errmsg)
+  call assert_equal([11, 9, 10, 7, 8, 5, 1, 3, 4, 12, 15, 16], g:callTrace)
+
+  unlet g:callTrace
+  delfunc Except
+  delfunc FirstDefer
+  delfunc SecondDeferWithExcept
+  delfunc ThirdDefer
+  delfunc Foo
+endfunc
+
+func Test_func_curly_brace_invalid_name()
+  func Fail()
+    func Foo{'()'}bar()
+    endfunc
+  endfunc
+
+  call assert_fails('call Fail()', 'E475: Invalid argument: Foo()bar')
+
+  silent! call Fail()
+  call assert_equal([], getcompletion('Foo', 'function'))
+
+  set formatexpr=Fail()
+  normal! gqq
+  call assert_equal([], getcompletion('Foo', 'function'))
+
+  set formatexpr&
+  delfunc Fail
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

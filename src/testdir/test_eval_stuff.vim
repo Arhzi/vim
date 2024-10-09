@@ -1,5 +1,9 @@
 " Tests for various eval things.
 
+source view_util.vim
+source shared.vim
+import './vim9.vim' as v9
+
 function s:foo() abort
   try
     return [] == 0
@@ -17,17 +21,12 @@ func Test_nocatch_restore_silent_emsg()
     throw 1
   catch
   endtry
-  echoerr 'wrong'
-  let c1 = nr2char(screenchar(&lines, 1))
-  let c2 = nr2char(screenchar(&lines, 2))
-  let c3 = nr2char(screenchar(&lines, 3))
-  let c4 = nr2char(screenchar(&lines, 4))
-  let c5 = nr2char(screenchar(&lines, 5))
-  call assert_equal('wrong', c1 . c2 . c3 . c4 . c5)
+  echoerr 'wrong again'
+  call assert_equal('wrong again', ScreenLine(&lines))
 endfunc
 
 func Test_mkdir_p()
-  call mkdir('Xmkdir/nested', 'p')
+  call mkdir('Xmkdir/nested', 'pR')
   call assert_true(isdirectory('Xmkdir/nested'))
   try
     " Trying to make existing directories doesn't error
@@ -37,13 +36,70 @@ func Test_mkdir_p()
     call assert_report('mkdir(..., "p") failed for an existing directory')
   endtry
   " 'p' doesn't suppress real errors
-  call writefile([], 'Xfile')
-  call assert_fails('call mkdir("Xfile", "p")', 'E739')
-  call delete('Xfile')
-  call delete('Xmkdir', 'rf')
+  call writefile([], 'Xmkdirfile', 'D')
+  call assert_fails('call mkdir("Xmkdirfile", "p")', 'E739:')
+
   call assert_equal(0, mkdir(test_null_string()))
-  call assert_fails('call mkdir([])', 'E730')
-  call assert_fails('call mkdir("abc", [], [])', 'E745')
+  call assert_fails('call mkdir([])', 'E730:')
+  call assert_fails('call mkdir("abc", [], [])', 'E745:')
+endfunc
+
+func DoMkdirDel(name)
+  call mkdir(a:name, 'pD')
+  call assert_true(isdirectory(a:name))
+endfunc
+
+func DoMkdirDelAddFile(name)
+  call mkdir(a:name, 'pD')
+  call assert_true(isdirectory(a:name))
+  call writefile(['text'], a:name .. '/file')
+endfunc
+
+func DoMkdirDelRec(name)
+  call mkdir(a:name, 'pR')
+  call assert_true(isdirectory(a:name))
+endfunc
+
+func DoMkdirDelRecAddFile(name)
+  call mkdir(a:name, 'pR')
+  call assert_true(isdirectory(a:name))
+  call writefile(['text'], a:name .. '/file')
+endfunc
+
+func Test_mkdir_defer_del()
+  " Xtopdir/tmp is created thus deleted, not Xtopdir itself
+  call mkdir('Xtopdir', 'R')
+  call DoMkdirDel('Xtopdir/tmp')
+  call assert_true(isdirectory('Xtopdir'))
+  call assert_false(isdirectory('Xtopdir/tmp'))
+
+  " Deletion fails because "tmp" contains "sub"
+  call DoMkdirDel('Xtopdir/tmp/sub')
+  call assert_true(isdirectory('Xtopdir'))
+  call assert_true(isdirectory('Xtopdir/tmp'))
+  call delete('Xtopdir/tmp', 'rf')
+
+  " Deletion fails because "tmp" contains "file"
+  call DoMkdirDelAddFile('Xtopdir/tmp')
+  call assert_true(isdirectory('Xtopdir'))
+  call assert_true(isdirectory('Xtopdir/tmp'))
+  call assert_true(filereadable('Xtopdir/tmp/file'))
+  call delete('Xtopdir/tmp', 'rf')
+
+  " Xtopdir/tmp is created thus deleted, not Xtopdir itself
+  call DoMkdirDelRec('Xtopdir/tmp')
+  call assert_true(isdirectory('Xtopdir'))
+  call assert_false(isdirectory('Xtopdir/tmp'))
+
+  " Deletion works even though "tmp" contains "sub"
+  call DoMkdirDelRec('Xtopdir/tmp/sub')
+  call assert_true(isdirectory('Xtopdir'))
+  call assert_false(isdirectory('Xtopdir/tmp'))
+
+  " Deletion works even though "tmp" contains "file"
+  call DoMkdirDelRecAddFile('Xtopdir/tmp')
+  call assert_true(isdirectory('Xtopdir'))
+  call assert_false(isdirectory('Xtopdir/tmp'))
 endfunc
 
 func Test_line_continuation()
@@ -68,27 +124,106 @@ func Test_E963()
 endfunc
 
 func Test_for_invalid()
-  call assert_fails("for x in 99", 'E714:')
-  call assert_fails("for x in 'asdf'", 'E714:')
-  call assert_fails("for x in {'a': 9}", 'E714:')
+  call assert_fails("for x in 99", 'E1098:')
+  call assert_fails("for x in function('winnr')", 'E1098:')
+  call assert_fails("for x in {'a': 9}", 'E1098:')
+
+  let lines =<< trim END
+    for v:maxcol in range(5)
+    endfor
+  END
+
+  let save_v_maxcol = v:maxcol
+  call v9.CheckLegacyAndVim9Failure(lines, 'E46:')
+  call assert_equal(save_v_maxcol, v:maxcol)
+
+  let lines =<< trim END
+    for g:constvar in range(5)
+    endfor
+  END
+
+  const g:constvar = 10
+  call v9.CheckLegacyAndVim9Failure(lines, 'E741:')
+  call assert_equal(10, g:constvar)
+  unlet g:constvar
+
+  let g:constvar = 10
+  lockvar 0 g:constvar
+  call v9.CheckLegacyAndVim9Failure(lines, 'E1122:')
+  call assert_equal(10, g:constvar)
+  unlet g:constvar
+
+  if 0
+    /1/5/2/s/\n
+  endif
+  redraw
+endfunc
+
+func Test_for_over_null_string()
+  let save_enc = &enc
+  set enc=iso8859
+  let cnt = 0
+  for c in test_null_string()
+    let cnt += 1
+  endfor
+  call assert_equal(0, cnt)
+
+  let &enc = save_enc
+endfunc
+
+func Test_for_with_modifier()
+  " this checks has_loop_cmd() works with a modifier
+  let result = []
+  vim9cmd for i in range(3)
+    call extend(result, [i])
+  endfor
+  call assert_equal([0, 1, 2], result)
+endfunc
+
+func Test_for_invalid_line_count()
+  let lines =<< trim END
+      111111111111111111111111 for line in ['one']
+      endfor
+  END
+  call writefile(lines, 'XinvalidFor', 'D')
+  " only test that this doesn't crash
+  call RunVim([], [], '-u NONE -e -s -S XinvalidFor -c qa')
 endfunc
 
 func Test_readfile_binary()
   new
   call setline(1, ['one', 'two', 'three'])
   setlocal ff=dos
-  silent write XReadfile
-  let lines = 'XReadfile'->readfile()
+  silent write XReadfile_bin
+  let lines = 'XReadfile_bin'->readfile()
   call assert_equal(['one', 'two', 'three'], lines)
-  let lines = readfile('XReadfile', '', 2)
+  let lines = readfile('XReadfile_bin', '', 2)
   call assert_equal(['one', 'two'], lines)
-  let lines = readfile('XReadfile', 'b')
+  let lines = readfile('XReadfile_bin', 'b')
   call assert_equal(["one\r", "two\r", "three\r", ""], lines)
-  let lines = readfile('XReadfile', 'b', 2)
+  let lines = readfile('XReadfile_bin', 'b', 2)
   call assert_equal(["one\r", "two\r"], lines)
 
   bwipe!
-  call delete('XReadfile')
+  call delete('XReadfile_bin')
+endfunc
+
+func Test_readfile_binary_empty()
+  call writefile([], 'Xempty-file', 'D')
+  " This used to compare uninitialized memory in Vim <= 8.2.4065
+  call assert_equal([''], readfile('Xempty-file', 'b'))
+endfunc
+
+func Test_readfile_bom()
+  call writefile(["\ufeffFOO", "FOO\ufeffBAR"], 'XReadfile_bom')
+  call assert_equal(['FOO', 'FOOBAR'], readfile('XReadfile_bom'))
+  call delete('XReadfile_bom')
+endfunc
+
+func Test_readfile_max()
+  call writefile(range(1, 4), 'XReadfile_max', 'D')
+  call assert_equal(['1', '2'], readfile('XReadfile_max', '', 2))
+  call assert_equal(['3', '4'], readfile('XReadfile_max', '', -2))
 endfunc
 
 func Test_let_errmsg()
@@ -125,6 +260,10 @@ func Test_string_concatenation()
   let a = 'a'
   let a..=b
   call assert_equal('ab', a)
+
+  let a = 'A'
+  let b = 1.234
+  call assert_equal('A1.234', a .. b)
 endfunc
 
 " Test fix for issue #4507
@@ -144,12 +283,10 @@ func Test_string_concat_scriptversion2()
 
   call assert_fails('echo a . b', 'E15:')
   call assert_fails('let a .= b', 'E985:')
-  call assert_fails('let vers = 1.2.3', 'E15:')
+  call assert_fails('let vers = 1.2.3', 'E488:')
 
-  if has('float')
-    let f = .5
-    call assert_equal(0.5, f)
-  endif
+  let f = .5
+  call assert_equal(0.5, f)
 endfunc
 
 scriptversion 1
@@ -163,9 +300,7 @@ func Test_string_concat_scriptversion1()
   let vers = 1.2.3
   call assert_equal('123', vers)
 
-  if has('float')
-    call assert_fails('let f = .5', 'E15:')
-  endif
+  call assert_fails('let f = .5', 'E15:')
 endfunc
 
 scriptversion 3
@@ -202,6 +337,7 @@ func Test_vvar_scriptversion4()
   call assert_equal(15, 0o17)
   call assert_equal(15, 0O17)
   call assert_equal(18, 018)
+  call assert_equal(511, 0o777)
   call assert_equal(64, 0b1'00'00'00)
   call assert_equal(1048576, 0x10'00'00)
   call assert_equal(32768, 0o10'00'00)
@@ -217,12 +353,12 @@ func Test_vvar_scriptversion1()
   call assert_equal(15, 0o17)
   call assert_equal(15, 0O17)
   call assert_equal(18, 018)
+  call assert_equal(511, 0o777)
 endfunc
 
 func Test_scriptversion_fail()
-  call writefile(['scriptversion 9'], 'Xversionscript')
+  call writefile(['scriptversion 9'], 'Xversionscript', 'D')
   call assert_fails('source Xversionscript', 'E999:')
-  call delete('Xversionscript')
 endfunc
 
 func Test_execute_cmd_with_null()
@@ -238,10 +374,13 @@ func Test_execute_cmd_with_null()
   endif
 endfunc
 
-func Test_numbersize()
-  " This will fail on systems without 64 bit int support or when not configured
-  " correctly.
+func Test_number_max_min_size()
+  " This will fail on systems without 64 bit number support or when not
+  " configured correctly.
   call assert_equal(64, v:numbersize)
+
+  call assert_true(v:numbermin < -9999999)
+  call assert_true(v:numbermax > 9999999)
 endfunc
 
 func Assert_reg(name, type, value, valuestr, expr, exprstr)
@@ -533,6 +672,60 @@ func Test_setreg_basic()
   call assert_fails('call setreg("/", ["1", "2"])', 'E883:')
   call assert_fails('call setreg("=", ["1", "2"])', 'E883:')
   call assert_fails('call setreg(1, ["", "", [], ""])', 'E730:')
+endfunc
+
+func Test_curly_assignment()
+  let s:svar = 'svar'
+  let g:gvar = 'gvar'
+  let lname = 'gvar'
+  let gname = 'gvar'
+  let {'s:'.lname} = {'g:'.gname}
+  call assert_equal('gvar', s:gvar)
+  let s:gvar = ''
+  let { 's:'.lname } = { 'g:'.gname }
+  call assert_equal('gvar', s:gvar)
+  let s:gvar = ''
+  let { 's:' . lname } = { 'g:' . gname }
+  call assert_equal('gvar', s:gvar)
+  let s:gvar = ''
+  let { 's:' .. lname } = { 'g:' .. gname }
+  call assert_equal('gvar', s:gvar)
+
+  unlet s:svar
+  unlet s:gvar
+  unlet g:gvar
+endfunc
+
+func Test_deep_recursion()
+  " this was running out of stack
+  call assert_fails("exe 'if ' .. repeat('(', 1002)", 'E1169: Expression too recursive: ((')
+endfunc
+
+" K_SPECIAL in the modified character used be escaped, which causes
+" double-escaping with feedkeys() or as the return value of an <expr> mapping,
+" and doesn't match what getchar() returns,
+func Test_modified_char_no_escape_special()
+  nnoremap <M-…> <Cmd>let g:got_m_ellipsis += 1<CR>
+  call feedkeys("\<M-…>", 't')
+  call assert_equal("\<M-…>", getchar())
+  let g:got_m_ellipsis = 0
+  call feedkeys("\<M-…>", 'xt')
+  call assert_equal(1, g:got_m_ellipsis)
+  func Func()
+    return "\<M-…>"
+  endfunc
+  nmap <expr> <F2> Func()
+  call feedkeys("\<F2>", 'xt')
+  call assert_equal(2, g:got_m_ellipsis)
+  delfunc Func
+  nunmap <F2>
+  unlet g:got_m_ellipsis
+  nunmap <M-…>
+endfunc
+
+func Test_eval_string_in_special_key()
+  " this was using the '{' inside <> as the start of an interpolated string
+  silent! echo 0{1-$"\<S--{>n|nö% 
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

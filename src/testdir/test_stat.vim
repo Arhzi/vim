@@ -1,5 +1,7 @@
 " Tests for stat functions and checktime
 
+source check.vim
+
 func CheckFileTime(doSleep)
   let fnames = ['Xtest1.tmp', 'Xtest2.tmp', 'Xtest3.tmp']
   let times = []
@@ -61,7 +63,7 @@ func Test_checktime()
   let fname = 'Xtest.tmp'
 
   let fl = ['Hello World!']
-  call writefile(fl, fname)
+  call writefile(fl, fname, 'D')
   set autoread
   exec 'e' fname
   call SleepForTimestamp()
@@ -70,8 +72,39 @@ func Test_checktime()
   call writefile(fl, fname)
   checktime
   call assert_equal(fl[0], getline(1))
+endfunc
 
-  call delete(fname)
+func Test_checktime_fast()
+  CheckFeature nanotime
+
+  let fname = 'Xtest.tmp'
+
+  let fl = ['Hello World!']
+  call writefile(fl, fname, 'D')
+  set autoread
+  exec 'e' fname
+  let fl = readfile(fname)
+  let fl[0] .= ' - checktime'
+  call writefile(fl, fname)
+  checktime
+  call assert_equal(fl[0], getline(1))
+endfunc
+
+func Test_autoread_fast()
+  CheckFeature nanotime
+
+  " this is timing sensitive
+  let g:test_is_flaky = 1
+
+  new Xautoread
+  setlocal autoread
+  call setline(1, 'foo')
+  w!
+  sleep 10m
+  call writefile(['bar'], 'Xautoread', 'D')
+  sleep 10m
+  checktime
+  call assert_equal('bar', trim(getline(1)))
 endfunc
 
 func Test_autoread_file_deleted()
@@ -132,7 +165,7 @@ func Test_getftype()
     return
   endif
 
-  silent !ln -s Xfile Xlink
+  silent !ln -s Xlinkfile Xlink
   call assert_equal('link', getftype('Xlink'))
   call delete('Xlink')
 
@@ -177,12 +210,15 @@ endfunc
 func Test_win32_symlink_dir()
   " On Windows, non-admin users cannot create symlinks.
   " So we use an existing symlink for this test.
-  if has('win32')
-    " Check if 'C:\Users\All Users' is a symlink to a directory.
-    let res = system('dir C:\Users /a')
-    if match(res, '\C<SYMLINKD> *All Users') >= 0
-      " Get the filetype of the symlink.
-      call assert_equal('dir', getftype('C:\Users\All Users'))
-    endif
+  CheckMSWindows
+  " Check if 'C:\Users\All Users' is a symlink to a directory.
+  let res = system('dir C:\Users /a')
+  if match(res, '\C<SYMLINKD> *All Users') >= 0
+    " Get the filetype of the symlink.
+    call assert_equal('dir', getftype('C:\Users\All Users'))
+  else
+    throw 'Skipped: cannot find an existing symlink'
   endif
 endfunc
+
+" vim: shiftwidth=2 sts=2 expandtab

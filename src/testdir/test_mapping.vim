@@ -3,42 +3,66 @@
 source shared.vim
 source check.vim
 source screendump.vim
+source term_util.vim
+import './vim9.vim' as v9
 
 func Test_abbreviation()
+  new
   " abbreviation with 0x80 should work
   inoreab чкпр   vim
   call feedkeys("Goчкпр \<Esc>", "xt")
   call assert_equal('vim ', getline('$'))
   iunab чкпр
-  set nomodified
+  bwipe!
+endfunc
+
+func Test_abbreviation_with_noremap()
+  nnoremap <F2> :echo "cheese"
+  cabbr cheese xxx
+  call feedkeys(":echo \"cheese\"\<C-B>\"\<CR>", 'tx')
+  call assert_equal('"echo "xxx"', @:)
+  call feedkeys("\<F2>\<C-B>\"\<CR>", 'tx')
+  call assert_equal('"echo "cheese"', @:)
+  nnoremap <F2> :echo "cheese<C-]>"
+  call feedkeys("\<F2>\<C-B>\"\<CR>", 'tx')
+  call assert_equal('"echo "xxx"', @:)
+  nunmap <F2>
+  cunabbr cheese
+
+  new
+  inoremap <buffer> ( <C-]>()
+  iabbr <buffer> fnu fun
+  call feedkeys("ifnu(", 'tx')
+  call assert_equal('fun()', getline(1))
+  bwipe!
 endfunc
 
 func Test_abclear()
-   abbrev foo foobar
-   iabbrev fooi foobari
-   cabbrev fooc foobarc
-   call assert_equal("\n\n"
-         \        .. "c  fooc          foobarc\n"
-         \        .. "i  fooi          foobari\n"
-         \        .. "!  foo           foobar", execute('abbrev'))
+  abbrev foo foobar
+  iabbrev fooi foobari
+  cabbrev fooc foobarc
+  call assert_equal("\n\n"
+        \        .. "c  fooc          foobarc\n"
+        \        .. "i  fooi          foobari\n"
+        \        .. "!  foo           foobar", execute('abbrev'))
 
-   iabclear
-   call assert_equal("\n\n"
-         \        .. "c  fooc          foobarc\n"
-         \        .. "c  foo           foobar", execute('abbrev'))
-   abbrev foo foobar
-   iabbrev fooi foobari
+  iabclear
+  call assert_equal("\n\n"
+        \        .. "c  fooc          foobarc\n"
+        \        .. "c  foo           foobar", execute('abbrev'))
+  abbrev foo foobar
+  iabbrev fooi foobari
 
-   cabclear
-   call assert_equal("\n\n"
-         \        .. "i  fooi          foobari\n"
-         \        .. "i  foo           foobar", execute('abbrev'))
-   abbrev foo foobar
-   cabbrev fooc foobarc
+  cabclear
+  call assert_equal("\n\n"
+        \        .. "i  fooi          foobari\n"
+        \        .. "i  foo           foobar", execute('abbrev'))
+  abbrev foo foobar
+  cabbrev fooc foobarc
 
-   abclear
-   call assert_equal("\n\nNo abbreviation found", execute('abbrev'))
-   call assert_fails('%abclear', 'E481:')
+  abclear
+  call assert_equal("\n\nNo abbreviation found", execute('abbrev'))
+  call assert_fails('%abclear', 'E481:')
 endfunc
 
 func Test_abclear_buffer()
@@ -65,7 +89,7 @@ func Test_abclear_buffer()
         \        .. "!  foo           foobar", execute('abbrev'))
 
   abclear
-   call assert_equal("\n\nNo abbreviation found", execute('abbrev'))
+  call assert_equal("\n\nNo abbreviation found", execute('abbrev'))
 
   %bwipe
 endfunc
@@ -92,9 +116,7 @@ func Test_map_ctrl_c_visual()
 endfunc
 
 func Test_map_langmap()
-  if !has('langmap')
-    return
-  endif
+  CheckFeature langmap
 
   " check langmap applies in normal mode
   set langmap=+- nolangremap
@@ -120,7 +142,7 @@ func Test_map_langmap()
   unmap x
   bwipe!
 
-  " 'langnoremap' follows 'langremap' and vise versa
+  " 'langnoremap' follows 'langremap' and vice versa
   set langremap
   set langnoremap
   call assert_equal(0, &langremap)
@@ -161,7 +183,7 @@ func Test_map_langmap()
   imap a c
   call feedkeys("Go\<C-R>a\<Esc>", "xt")
   call assert_equal('bbbb', getline('$'))
- 
+
   " langmap should not apply in Command-line mode
   set langmap=+{ nolangremap
   call feedkeys(":call append(line('$'), '+')\<CR>", "xt")
@@ -247,6 +269,28 @@ func Test_map_meta_multibyte()
   iunmap <M-á>
 endfunc
 
+func Test_map_super_quotes()
+  if "\<D-j>"[-1:] == '>'
+    throw 'Skipped: <D- modifier not supported'
+  endif
+
+  imap <D-"> foo
+  call feedkeys("Go-\<*D-\">-\<Esc>", "xt")
+  call assert_equal("-foo-", getline('$'))
+  set nomodified
+  iunmap <D-">
+endfunc
+
+func Test_map_super_multibyte()
+  if "\<D-j>"[-1:] == '>'
+    throw 'Skipped: <D- modifier not supported'
+  endif
+
+  imap <D-á> foo
+  call assert_match('i  <D-á>\s*foo', execute('imap'))
+  iunmap <D-á>
+endfunc
+
 func Test_abbr_after_line_join()
   new
   abbr foo bar
@@ -259,9 +303,7 @@ func Test_abbr_after_line_join()
 endfunc
 
 func Test_map_timeout()
-  if !has('timers')
-    return
-  endif
+  CheckFeature timers
   nnoremap aaaa :let got_aaaa = 1<CR>
   nnoremap bb :let got_bb = 1<CR>
   nmap b aaa
@@ -290,9 +332,9 @@ func Test_map_timeout()
 endfunc
 
 func Test_map_timeout_with_timer_interrupt()
-  if !has('job') || !has('timers')
-    return
-  endif
+  CheckFeature job
+  CheckFeature timers
+  let g:test_is_flaky = 1
 
   " Confirm the timer invoked in exit_cb of the job doesn't disturb mapped key
   " sequence.
@@ -422,7 +464,7 @@ func Test_error_in_map_expr()
   nmap <expr> ! Func()
   set updatetime=50
   [CODE]
-  call writefile(lines, 'Xtest.vim')
+  call writefile(lines, 'Xtest.vim', 'D')
 
   let buf = term_start(GetVimCommandCleanTerm() .. ' -S Xtest.vim', {'term_rows': 8})
   let job = term_getjob(buf)
@@ -441,7 +483,6 @@ func Test_error_in_map_expr()
     call assert_equal('', job_info(job).termsig)
   endif
 
-  call delete('Xtest.vim')
   exe buf .. 'bwipe!'
 endfunc
 
@@ -449,9 +490,12 @@ func Test_list_mappings()
   " Remove default mappings
   imapclear
 
-  inoremap <C-M> CtrlM
+  " reset 'isident' to check it isn't used
+  set isident=
+  inoremap <C-m> CtrlM
   inoremap <A-S> AltS
   inoremap <S-/> ShiftSlash
+  set isident&
   call assert_equal([
 	\ 'i  <S-/>       * ShiftSlash',
 	\ 'i  <M-S>       * AltS',
@@ -478,15 +522,89 @@ func Test_list_mappings()
         \ execute('nmap ,n')->trim()->split("\n"))
 
   " verbose map
+  let lines = execute('verbose map ,n')->trim()->split("\n")
+
+  " Remove "Seen modifyOtherKeys" and other optional info.
+  if lines[0] =~ 'Seen modifyOtherKeys'
+    call remove(lines, 0)
+  endif
+  if lines[0] =~ 'modifyOtherKeys detected:'
+    call remove(lines, 0)
+  endif
+  if lines[0] =~ 'Kitty keyboard protocol:'
+    call remove(lines, 0)
+  endif
+  if lines[0] == ''
+    call remove(lines, 0)
+  endif
+
+  let index = indexof(lines, 'v:val =~ "Last set"')
+  call assert_equal(1, index)
   call assert_match("\tLast set from .*/test_mapping.vim line \\d\\+$",
-        \ execute('verbose map ,n')->trim()->split("\n")[1])
+        \ lines[index])
+
+  " character with K_SPECIAL byte in rhs
+  nmap foo …
+  call assert_equal(['n  foo           …'],
+        \ execute('nmap foo')->trim()->split("\n"))
+
+  " modified character with K_SPECIAL byte in rhs
+  nmap foo <M-…>
+  call assert_equal(['n  foo           <M-…>'],
+        \ execute('nmap foo')->trim()->split("\n"))
+
+  " character with K_SPECIAL byte in lhs
+  nmap … foo
+  call assert_equal(['n  …             foo'],
+        \ execute('nmap …')->trim()->split("\n"))
+
+  " modified character with K_SPECIAL byte in lhs
+  nmap <M-…> foo
+  call assert_equal(['n  <M-…>         foo'],
+        \ execute('nmap <M-…>')->trim()->split("\n"))
+
+  " illegal bytes
+  let str = ":\x7f:\x80:\x90:\xd0:"
+  exe 'nmap foo ' .. str
+  call assert_equal(['n  foo           ' .. strtrans(str)],
+        \ execute('nmap foo')->trim()->split("\n"))
+  unlet str
 
   " map to CTRL-V
   exe "nmap ,k \<C-V>"
   call assert_equal(['n  ,k            <Nop>'],
         \ execute('nmap ,k')->trim()->split("\n"))
 
+  " map with space at the beginning
+  exe "nmap \<C-V> w <Nop>"
+  call assert_equal(['n  <Space>w      <Nop>'],
+        \ execute("nmap \<C-V> w")->trim()->split("\n"))
+
   nmapclear
+endfunc
+
+func Test_expr_map_gets_cursor()
+  new
+  call setline(1, ['one', 'some w!rd'])
+  func StoreColumn()
+    let g:exprLine = line('.')
+    let g:exprCol = col('.')
+    return 'x'
+  endfunc
+  nnoremap <expr> x StoreColumn()
+  2
+  nmap ! f!<Ignore>x
+  call feedkeys("!", 'xt')
+  call assert_equal('some wrd', getline(2))
+  call assert_equal(2, g:exprLine)
+  call assert_equal(7, g:exprCol)
+
+  bwipe!
+  unlet g:exprLine
+  unlet g:exprCol
+  delfunc StoreColumn
+  nunmap x
+  nunmap !
 endfunc
 
 func Test_expr_map_restore_cursor()
@@ -508,15 +626,58 @@ func Test_expr_map_restore_cursor()
       endfunc
       set stl=%{Status()}
   END
-  call writefile(lines, 'XtestExprMap')
+  call writefile(lines, 'XtestExprMap', 'D')
   let buf = RunVimInTerminal('-S XtestExprMap', #{rows: 10})
-  call TermWait(buf)
-  call term_sendkeys(buf, "\<C-B>")
+  call term_sendkeys(buf, GetEscCodeWithModifier('C', 'B'))
   call VerifyScreenDump(buf, 'Test_map_expr_1', {})
 
   " clean up
   call StopVimInTerminal(buf)
-  call delete('XtestExprMap')
+endfunc
+
+func Test_map_listing()
+  CheckScreendump
+
+  let lines =<< trim END
+      nmap a b
+  END
+  call writefile(lines, 'XtestMapList', 'D')
+  let buf = RunVimInTerminal('-S XtestMapList', #{rows: 6})
+  call term_sendkeys(buf, ":                      nmap a\<CR>")
+  call VerifyScreenDump(buf, 'Test_map_list_1', {})
+
+  " clean up
+  call StopVimInTerminal(buf)
+endfunc
+
+func Test_expr_map_error()
+  CheckScreendump
+
+  let lines =<< trim END
+      func Func()
+        throw 'test'
+        return ''
+      endfunc
+
+      nnoremap <expr> <F2> Func()
+      cnoremap <expr> <F2> Func()
+
+      call test_override('ui_delay', 10)
+  END
+  call writefile(lines, 'XtestExprMap', 'D')
+  let buf = RunVimInTerminal('-S XtestExprMap', #{rows: 10})
+  call term_sendkeys(buf, "\<F2>")
+  call TermWait(buf)
+  call term_sendkeys(buf, "\<CR>")
+  call VerifyScreenDump(buf, 'Test_map_expr_2', {})
+
+  call term_sendkeys(buf, ":abc\<F2>")
+  call VerifyScreenDump(buf, 'Test_map_expr_3', {})
+  call term_sendkeys(buf, "\<Esc>0")
+  call VerifyScreenDump(buf, 'Test_map_expr_4', {})
+
+  " clean up
+  call StopVimInTerminal(buf)
 endfunc
 
 " Test for mapping errors
@@ -666,12 +827,18 @@ func Test_mapcomplete()
   call feedkeys(":abbr! \<C-A>\<C-B>\"\<CR>", 'tx')
   call assert_equal("\"abbr! \x01", @:)
 
-  " Multiple matches for a map
-  nmap ,f /H<CR>
-  omap ,f /H<CR>
+  " When multiple matches have the same {lhs}, it should only appear once.
+  " The simplified form should also not be included.
+  nmap ,<C-F> /H<CR>
+  omap ,<C-F> /H<CR>
   call feedkeys(":map ,\<C-A>\<C-B>\"\<CR>", 'tx')
-  call assert_equal('"map ,f', @:)
+  call assert_equal('"map ,<C-F>', @:)
   mapclear
+endfunc
+
+func GetAbbrText()
+  unabbr hola
+  return 'hello'
 endfunc
 
 " Test for <expr> in abbreviation
@@ -686,10 +853,17 @@ func Test_expr_abbr()
   " invalid <expr> abbreviation
   abbr <expr> hte GetAbbr()
   call assert_fails('normal ihte ', 'E117:')
-  call assert_equal(' ', getline(1))
+  call assert_equal('', getline(1))
   unabbr <expr> hte
 
-  close!
+  " evaluating the expression deletes the abbreviation
+  abbr <expr> hola GetAbbrText()
+  call assert_equal('GetAbbrText()', maparg('hola', 'i', '1'))
+  call feedkeys("ahola \<Esc>", 'xt')
+  call assert_equal('hello ', getline('.'))
+  call assert_equal('', maparg('hola', 'i', '1'))
+
+  bwipe!
 endfunc
 
 " Test for storing mappings in different modes in a vimrc file
@@ -860,5 +1034,923 @@ func Test_map_cpo_special_keycode()
   mapclear
   mapclear!
 endfunc
+
+" Test for <Cmd> key in maps to execute commands
+func Test_map_cmdkey()
+  new
+
+  " Error cases
+  let x = 0
+  noremap <F3> <Cmd><Cmd>let x = 1<CR>
+  call assert_fails('call feedkeys("\<F3>", "xt")', 'E1136:')
+  call assert_equal(0, x)
+
+  noremap <F3> <Cmd>let x = 3
+  call assert_fails('call feedkeys("\<F3>", "xt!")', 'E1255:')
+  call assert_equal(0, x)
+
+  " works in various modes and sees the correct mode()
+  noremap <F3> <Cmd>let m = mode(1)<CR>
+  noremap! <F3> <Cmd>let m = mode(1)<CR>
+
+  " normal mode
+  call feedkeys("\<F3>", 'xt')
+  call assert_equal('n', m)
+
+  " visual mode
+  call feedkeys("v\<F3>", 'xt!')
+  call assert_equal('v', m)
+  " shouldn't leave the visual mode
+  call assert_equal('v', mode(1))
+  call feedkeys("\<Esc>", 'xt')
+  call assert_equal('n', mode(1))
+
+  " visual mapping in select mode
+  call feedkeys("gh\<F3>", 'xt!')
+  call assert_equal('v', m)
+  " shouldn't leave select mode
+  call assert_equal('s', mode(1))
+  call feedkeys("\<Esc>", 'xt')
+  call assert_equal('n', mode(1))
+
+  " select mode mapping
+  snoremap <F3> <Cmd>let m = mode(1)<cr>
+  call feedkeys("gh\<F3>", 'xt!')
+  call assert_equal('s', m)
+  " shouldn't leave select mode
+  call assert_equal('s', mode(1))
+  call feedkeys("\<Esc>", 'xt')
+  call assert_equal('n', mode(1))
+
+  " operator-pending mode
+  call feedkeys("d\<F3>", 'xt!')
+  call assert_equal('no', m)
+  " leaves the operator-pending mode
+  call assert_equal('n', mode(1))
+
+  " insert mode
+  call feedkeys("i\<F3>abc", 'xt')
+  call assert_equal('i', m)
+  call assert_equal('abc', getline('.'))
+
+  " replace mode
+  call feedkeys("0R\<F3>two", 'xt')
+  call assert_equal('R', m)
+  call assert_equal('two', getline('.'))
+
+  " virtual replace mode
+  call setline('.', "one\ttwo")
+  call feedkeys("4|gR\<F3>xxx", 'xt')
+  call assert_equal('Rv', m)
+  call assert_equal("onexxx\ttwo", getline('.'))
+
+  " cmdline mode
+  call feedkeys(":\<F3>\"xxx\<CR>", 'xt!')
+  call assert_equal('c', m)
+  call assert_equal('"xxx', @:)
+
+  " terminal mode
+  if CanRunVimInTerminal()
+    tnoremap <F3> <Cmd>let m = mode(1)<CR>
+    let buf = Run_shell_in_terminal({})
+    call feedkeys("\<F3>", 'xt')
+    call assert_equal('t', m)
+    call assert_equal('t', mode(1))
+    call StopShellInTerminal(buf)
+    close!
+    tunmap <F3>
+  endif
+
+  " invoke cmdline mode recursively
+  noremap! <F2> <Cmd>norm! :foo<CR>
+  %d
+  call setline(1, ['some short lines', 'of test text'])
+  call feedkeys(":bar\<F2>x\<C-B>\"\r", 'xt')
+  call assert_equal('"barx', @:)
+  unmap! <F2>
+
+  " test for calling a <SID> function
+  let lines =<< trim END
+    map <F2> <Cmd>call <SID>do_it()<CR>
+    func s:do_it()
+      let g:x = 32
+    endfunc
+  END
+  call writefile(lines, 'Xscript', 'D')
+  source Xscript
+  call feedkeys("\<F2>", 'xt')
+  call assert_equal(32, g:x)
+
+  unmap <F3>
+  unmap! <F3>
+  %bw!
+endfunc
+
+" text object enters visual mode
+func TextObj()
+  if mode() !=# "v"
+    normal! v
+  end
+  call cursor(1, 3)
+  normal! o
+  call cursor(2, 4)
+endfunc
+
+func s:cmdmap(lhs, rhs)
+  exe 'noremap ' .. a:lhs .. ' <Cmd>' .. a:rhs .. '<CR>'
+  exe 'noremap! ' .. a:lhs .. ' <Cmd>' .. a:rhs .. '<CR>'
+endfunc
+
+func s:cmdunmap(lhs)
+  exe 'unmap ' .. a:lhs
+  exe 'unmap! ' .. a:lhs
+endfunc
+
+" Map various <Fx> keys used by the <Cmd> key tests
+func s:setupMaps()
+  call s:cmdmap('<F3>', 'let m = mode(1)')
+  call s:cmdmap('<F4>', 'normal! ww')
+  call s:cmdmap('<F5>', 'normal! "ay')
+  call s:cmdmap('<F6>', 'throw "very error"')
+  call s:cmdmap('<F7>', 'call TextObj()')
+  call s:cmdmap('<F8>', 'startinsert')
+  call s:cmdmap('<F9>', 'stopinsert')
+endfunc
+
+" Remove the mappings setup by setupMaps()
+func s:cleanupMaps()
+  call s:cmdunmap('<F3>')
+  call s:cmdunmap('<F4>')
+  call s:cmdunmap('<F5>')
+  call s:cmdunmap('<F6>')
+  call s:cmdunmap('<F7>')
+  call s:cmdunmap('<F8>')
+  call s:cmdunmap('<F9>')
+endfunc
+
+" Test for <Cmd> mapping in normal mode
+func Test_map_cmdkey_normal_mode()
+  new
+  call s:setupMaps()
+
+  " check v:count and v:register works
+  call s:cmdmap('<F2>', 'let s = [mode(1), v:count, v:register]')
+  call feedkeys("\<F2>", 'xt')
+  call assert_equal(['n', 0, '"'], s)
+  call feedkeys("7\<F2>", 'xt')
+  call assert_equal(['n', 7, '"'], s)
+  call feedkeys("\"e\<F2>", 'xt')
+  call assert_equal(['n', 0, 'e'], s)
+  call feedkeys("5\"k\<F2>", 'xt')
+  call assert_equal(['n', 5, 'k'], s)
+  call s:cmdunmap('<F2>')
+
+  call setline(1, ['some short lines', 'of test text'])
+  call feedkeys("\<F7>y", 'xt')
+  call assert_equal("me short lines\nof t", @")
+  call assert_equal('v', getregtype('"'))
+  call assert_equal([0, 1, 3, 0], getpos("'<"))
+  call assert_equal([0, 2, 4, 0], getpos("'>"))
+
+  " startinsert
+  %d
+  call feedkeys("\<F8>abc", 'xt')
+  call assert_equal('abc', getline(1))
+
+  " feedkeys are not executed immediately
+  noremap ,a <Cmd>call feedkeys("aalpha") \| let g:a = getline(2)<CR>
+  %d
+  call setline(1, ['some short lines', 'of test text'])
+  call cursor(2, 3)
+  call feedkeys(",a\<F3>", 'xt')
+  call assert_equal('of test text', g:a)
+  call assert_equal('n', m)
+  call assert_equal(['some short lines', 'of alphatest text'], getline(1, '$'))
+  nunmap ,a
+
+  " feedkeys(..., 'x') is executed immediately, but insert mode is aborted
+  noremap ,b <Cmd>call feedkeys("abeta", 'x') \| let g:b = getline(2)<CR>
+  call feedkeys(",b\<F3>", 'xt')
+  call assert_equal('n', m)
+  call assert_equal('of alphabetatest text', g:b)
+  nunmap ,b
+
+  call s:cleanupMaps()
+  %bw!
+endfunc
+
+" Test for <Cmd> mapping with the :normal command
+func Test_map_cmdkey_normal_cmd()
+  new
+  noremap ,x <Cmd>call append(1, "xx") \| call append(1, "aa")<CR>
+  noremap ,f <Cmd>nosuchcommand<CR>
+  noremap ,e <Cmd>throw "very error" \| call append(1, "yy")<CR>
+  noremap ,m <Cmd>echoerr "The message." \| call append(1, "zz")<CR>
+  noremap ,w <Cmd>for i in range(5) \| if i==1 \| echoerr "Err" \| endif \| call append(1, i) \| endfor<CR>
+
+  call setline(1, ['some short lines', 'of test text'])
+  exe "norm ,x\r"
+  call assert_equal(['some short lines', 'aa', 'xx', 'of test text'], getline(1, '$'))
+
+  call assert_fails('norm ,f', 'E492:')
+  call assert_fails('norm ,e', 'very error')
+  call assert_fails('norm ,m', 'The message.')
+  call assert_equal(['some short lines', 'aa', 'xx', 'of test text'], getline(1, '$'))
+
+  %d
+  let caught_err = 0
+  try
+    exe "normal ,w"
+  catch /Vim(echoerr):Err/
+    let caught_err = 1
+  endtry
+  call assert_equal(1, caught_err)
+  call assert_equal(['', '0'], getline(1, '$'))
+
+  %d
+  call assert_fails('normal ,w', 'Err')
+  call assert_equal(['', '4', '3', '2' ,'1', '0'], getline(1, '$'))
+  call assert_equal(1, line('.'))
+
+  nunmap ,x
+  nunmap ,f
+  nunmap ,e
+  nunmap ,m
+  nunmap ,w
+  %bw!
+endfunc
+
+" Test for <Cmd> mapping in visual mode
+func Test_map_cmdkey_visual_mode()
+  new
+  set showmode
+  call s:setupMaps()
+
+  call setline(1, ['some short lines', 'of test text'])
+  call feedkeys("v\<F4>", 'xt!')
+  call assert_equal(['v', 1, 12], [mode(1), col('v'), col('.')])
+
+  " can invoke an operator, ending the visual mode
+  let @a = ''
+  call feedkeys("\<F5>", 'xt!')
+  call assert_equal('n', mode(1))
+  call assert_equal('some short l', @a)
+
+  " error doesn't interrupt visual mode
+  call assert_fails('call feedkeys("ggvw\<F6>", "xt!")', 'E605:')
+  call assert_equal(['v', 1, 6], [mode(1), col('v'), col('.')])
+  call feedkeys("\<F7>", 'xt!')
+  call assert_equal(['v', 1, 3, 2, 4], [mode(1), line('v'), col('v'), line('.'), col('.')])
+
+  " startinsert gives "-- (insert) VISUAL --" mode
+  call feedkeys("\<F8>", 'xt!')
+  call assert_equal(['v', 1, 3, 2, 4], [mode(1), line('v'), col('v'), line('.'), col('.')])
+  redraw!
+  call assert_match('^-- (insert) VISUAL --', Screenline(&lines))
+  call feedkeys("\<Esc>new ", 'x')
+  call assert_equal(['some short lines', 'of new test text'], getline(1, '$'))
+
+  call s:cleanupMaps()
+  set showmode&
+  %bw!
+endfunc
+
+" Test for <Cmd> mapping in select mode
+func Test_map_cmdkey_select_mode()
+  new
+  set showmode
+  call s:setupMaps()
+
+  snoremap <F1> <cmd>throw "very error"<CR>
+  snoremap <F2> <cmd>normal! <c-g>"by<CR>
+  call setline(1, ['some short lines', 'of test text'])
+
+  call feedkeys("gh\<F4>", "xt!")
+  call assert_equal(['s', 1, 12], [mode(1), col('v'), col('.')])
+  redraw!
+  call assert_match('^-- SELECT --', Screenline(&lines))
+
+  " visual mapping in select mode restarts select mode after operator
+  let @a = ''
+  call feedkeys("\<F5>", 'xt!')
+  call assert_equal('s', mode(1))
+  call assert_equal('some short l', @a)
+
+  " select mode mapping works, and does not restart select mode
+  let @b = ''
+  call feedkeys("\<F2>", 'xt!')
+  call assert_equal('n', mode(1))
+  call assert_equal('some short l', @b)
+
+  " error doesn't interrupt temporary visual mode
+  call assert_fails('call feedkeys("\<Esc>ggvw\<C-G>\<F6>", "xt!")', 'E605:')
+  redraw!
+  call assert_match('^-- VISUAL --', Screenline(&lines))
+  " quirk: restoration of select mode is not performed
+  call assert_equal(['v', 1, 6], [mode(1), col('v'), col('.')])
+
+  " error doesn't interrupt select mode
+  call assert_fails('call feedkeys("\<Esc>ggvw\<C-G>\<F1>", "xt!")', 'E605:')
+  redraw!
+  call assert_match('^-- SELECT --', Screenline(&lines))
+  call assert_equal(['s', 1, 6], [mode(1), col('v'), col('.')])
+
+  call feedkeys("\<F7>", 'xt!')
+  redraw!
+  call assert_match('^-- SELECT --', Screenline(&lines))
+  call assert_equal(['s', 1, 3, 2, 4], [mode(1), line('v'), col('v'), line('.'), col('.')])
+
+  " startinsert gives "-- SELECT (insert) --" mode
+  call feedkeys("\<F8>", 'xt!')
+  redraw!
+  call assert_match('^-- (insert) SELECT --', Screenline(&lines))
+  call assert_equal(['s', 1, 3, 2, 4], [mode(1), line('v'), col('v'), line('.'), col('.')])
+  call feedkeys("\<Esc>new ", 'x')
+  call assert_equal(['some short lines', 'of new test text'], getline(1, '$'))
+
+  sunmap <F1>
+  sunmap <F2>
+  call s:cleanupMaps()
+  set showmode&
+  %bw!
+endfunc
+
+" Test for <Cmd> mapping in operator-pending mode
+func Test_map_cmdkey_op_pending_mode()
+  new
+  call s:setupMaps()
+
+  call setline(1, ['some short lines', 'of test text'])
+  call feedkeys("d\<F4>", 'xt')
+  call assert_equal(['lines', 'of test text'], getline(1, '$'))
+  call assert_equal(['some short '], getreg('"', 1, 1))
+  " create a new undo point
+  let &g:undolevels = &g:undolevels
+
+  call feedkeys(".", 'xt')
+  call assert_equal(['test text'], getline(1, '$'))
+  call assert_equal(['lines', 'of '], getreg('"', 1, 1))
+  " create a new undo point
+  let &g:undolevels = &g:undolevels
+
+  call feedkeys("uu", 'xt')
+  call assert_equal(['some short lines', 'of test text'], getline(1, '$'))
+
+  " error aborts operator-pending, operator not performed
+  call assert_fails('call feedkeys("d\<F6>", "xt")', 'E605:')
+  call assert_equal(['some short lines', 'of test text'], getline(1, '$'))
+
+  call feedkeys("\"bd\<F7>", 'xt')
+  call assert_equal(['soest text'], getline(1, '$'))
+  call assert_equal(['me short lines', 'of t'], getreg('b', 1, 1))
+
+  " startinsert aborts operator
+  call feedkeys("d\<F8>cc", 'xt')
+  call assert_equal(['soccest text'], getline(1, '$'))
+
+  call s:cleanupMaps()
+  %bw!
+endfunc
+
+" Test for <Cmd> mapping in insert mode
+func Test_map_cmdkey_insert_mode()
+  new
+  call s:setupMaps()
+
+  call setline(1, ['some short lines', 'of test text'])
+  " works the same as <C-O>w<C-O>w
+  call feedkeys("iindeed \<F4>little ", 'xt')
+  call assert_equal(['indeed some short little lines', 'of test text'], getline(1, '$'))
+  call assert_fails('call feedkeys("i\<F6> 2", "xt")', 'E605:')
+  call assert_equal(['indeed some short little 2 lines', 'of test text'], getline(1, '$'))
+
+  " Note when entering visual mode from InsertEnter autocmd, an async event,
+  " or a <Cmd> mapping, vim ends up in undocumented "INSERT VISUAL" mode.
+  call feedkeys("i\<F7>stuff ", 'xt')
+  call assert_equal(['indeed some short little 2 lines', 'of stuff test text'], getline(1, '$'))
+  call assert_equal(['v', 1, 3, 2, 9], [mode(1), line('v'), col('v'), line('.'), col('.')])
+
+  call feedkeys("\<F5>", 'xt')
+  call assert_equal(['deed some short little 2 lines', 'of stuff '], getreg('a', 1, 1))
+
+  " also works as part of abbreviation
+  abbr foo <Cmd>let g:y = 17<CR>bar
+  exe "normal i\<space>foo "
+  call assert_equal(17, g:y)
+  call assert_equal('in bar deed some short little 2 lines', getline(1))
+  unabbr foo
+
+  " :startinsert does nothing
+  call setline(1, 'foo bar')
+  call feedkeys("ggi\<F8>vim", 'xt')
+  call assert_equal('vimfoo bar', getline(1))
+
+  " :stopinsert works
+  call feedkeys("ggi\<F9>Abc", 'xt')
+  call assert_equal('vimfoo barbc', getline(1))
+
+  call s:cleanupMaps()
+  %bw!
+endfunc
+
+" Test for <Cmd> mapping in insert-completion mode
+func Test_map_cmdkey_insert_complete_mode()
+  new
+  call s:setupMaps()
+
+  call setline(1, 'some short lines')
+  call feedkeys("os\<C-X>\<C-N>\<F3>\<C-N> ", 'xt')
+  call assert_equal('ic', m)
+  call assert_equal(['some short lines', 'short '], getline(1, '$'))
+
+  call s:cleanupMaps()
+  %bw!
+endfunc
+
+" Test for <Cmd> mapping in cmdline mode
+func Test_map_cmdkey_cmdline_mode()
+  new
+  call s:setupMaps()
+
+  call setline(1, ['some short lines', 'of test text'])
+  let x = 0
+  call feedkeys(":let x\<F3>= 10\r", 'xt')
+  call assert_equal('c', m)
+  call assert_equal(10, x)
+
+  " exception doesn't leave cmdline mode
+  call assert_fails('call feedkeys(":let x\<F6>= 20\r", "xt")', 'E605:')
+  call assert_equal(20, x)
+
+  " move cursor in the buffer from cmdline mode
+  call feedkeys(":let x\<F4>= 30\r", 'xt')
+  call assert_equal(30, x)
+  call assert_equal(12, col('.'))
+
+  " :startinsert takes effect after leaving cmdline mode
+  call feedkeys(":let x\<F8>= 40\rnew ", 'xt')
+  call assert_equal(40, x)
+  call assert_equal('some short new lines', getline(1))
+
+  call s:cleanupMaps()
+  %bw!
+endfunc
+
+func Test_map_cmdkey_redo()
+  func SelectDash()
+    call search('^---\n\zs', 'bcW')
+    norm! V
+    call search('\n\ze---$', 'W')
+  endfunc
+
+  let text =<< trim END
+      ---
+      aaa
+      ---
+      bbb
+      bbb
+      ---
+      ccc
+      ccc
+      ccc
+      ---
+  END
+  new Xcmdtext
+  call setline(1, text)
+
+  onoremap <silent> i- <Cmd>call SelectDash()<CR>
+  call feedkeys('2Gdi-', 'xt')
+  call assert_equal(['---', '---'], getline(1, 2))
+  call feedkeys('j.', 'xt')
+  call assert_equal(['---', '---', '---'], getline(1, 3))
+  call feedkeys('j.', 'xt')
+  call assert_equal(['---', '---', '---', '---'], getline(1, 4))
+
+  bwipe!
+  call delete('Xcmdtext')
+  delfunc SelectDash
+  ounmap i-
+
+  new
+  call setline(1, 'aaa bbb ccc ddd')
+
+  " command can contain special keys
+  onoremap ix <Cmd>let g:foo ..= '…'<Bar>normal! <C-Right><CR>
+  let g:foo = ''
+  call feedkeys('0dix.', 'xt')
+  call assert_equal('……', g:foo)
+  call assert_equal('ccc ddd', getline(1))
+  unlet g:foo
+
+  " command line ending in "0" is handled without errors
+  onoremap ix <Cmd>eval 0<CR>
+  call feedkeys('dix.', 'xt')
+
+  ounmap ix
+  bwipe!
+endfunc
+
+func Test_map_script_cmd_restore()
+  let lines =<< trim END
+      vim9script
+      nnoremap <F3> <ScriptCmd>eval 1 + 2<CR>
+  END
+  call v9.CheckScriptSuccess(lines)
+  call feedkeys("\<F3>:let g:result = 3+4\<CR>", 'xtc')
+  call assert_equal(7, g:result)
+
+  nunmap <F3>
+  unlet g:result
+endfunc
+
+func Test_map_script_cmd_finds_func()
+  let lines =<< trim END
+      vim9script
+      onoremap <F3> <ScriptCmd>Func()<CR>
+      def Func()
+        g:func_called = 'yes'
+      enddef
+  END
+  call v9.CheckScriptSuccess(lines)
+  call feedkeys("y\<F3>\<Esc>", 'xtc')
+  call assert_equal('yes', g:func_called)
+
+  ounmap <F3>
+  unlet g:func_called
+endfunc
+
+func Test_map_script_cmd_survives_unmap()
+  let lines =<< trim END
+      vim9script
+      var n = 123
+      nnoremap <F4> <ScriptCmd><CR>
+      autocmd CmdlineEnter * silent! nunmap <F4>
+      nnoremap <F3> :<ScriptCmd>eval setbufvar(bufnr(), "result", n)<CR>
+      feedkeys("\<F3>\<CR>", 'xct')
+      assert_equal(123, b:result)
+  END
+  call v9.CheckScriptSuccess(lines)
+
+  nunmap <F3>
+  unlet b:result
+  autocmd! CmdlineEnter
+endfunc
+
+func Test_map_script_cmd_redo()
+  call mkdir('Xmapcmd', 'R')
+  let lines =<< trim END
+      vim9script
+      import autoload './script.vim'
+      onoremap <F3> <ScriptCmd>script.Func()<CR>
+  END
+  call writefile(lines, 'Xmapcmd/plugin.vim')
+
+  let lines =<< trim END
+      vim9script
+      export def Func()
+        normal! V
+      enddef
+  END
+  call writefile(lines, 'Xmapcmd/script.vim')
+  new
+  call setline(1, ['one', 'two', 'three', 'four', 'five'])
+  nnoremap j j
+  source Xmapcmd/plugin.vim
+  call feedkeys("d\<F3>j.j.", 'xt')
+  call assert_equal(['two', 'four'], getline(1, '$'))
+
+  ounmap <F3>
+  nunmap j
+  bwipe!
+endfunc
+
+" Test for using <script> with a map to remap characters in rhs
+func Test_script_local_remap()
+  new
+  inoremap <buffer> <SID>xyz mno
+  inoremap <buffer> <script> abc st<SID>xyzre
+  normal iabc
+  call assert_equal('stmnore', getline(1))
+  bwipe!
+endfunc
+
+func Test_abbreviate_multi_byte()
+  new
+  iabbrev foo bar
+  call feedkeys("ifoo…\<Esc>", 'xt')
+  call assert_equal("bar…", getline(1))
+  iunabbrev foo
+  bwipe!
+endfunc
+
+" Test for abbreviations with 'latin1' encoding
+func Test_abbreviate_latin1_encoding()
+  set encoding=latin1
+  call assert_fails('abbr ab#$c ABC', 'E474:')
+  new
+  iabbr <buffer> #i #include
+  iabbr <buffer> ## #enddef
+  exe "normal i#i\<C-]>"
+  call assert_equal('#include', getline(1))
+  exe "normal 0Di##\<C-]>"
+  call assert_equal('#enddef', getline(1))
+  %bw!
+  set encoding=utf-8
+endfunc
+
+" Test for <Plug> always being mapped, even when used with "noremap".
+func Test_plug_remap()
+  let g:foo = 0
+  nnoremap <Plug>(Increase_x) <Cmd>let g:foo += 1<CR>
+  nmap <F2> <Plug>(Increase_x)
+  nnoremap <F3> <Plug>(Increase_x)
+  call feedkeys("\<F2>", 'xt')
+  call assert_equal(1, g:foo)
+  call feedkeys("\<F3>", 'xt')
+  call assert_equal(2, g:foo)
+  nnoremap x <Nop>
+  nmap <F4> x<Plug>(Increase_x)x
+  nnoremap <F5> x<Plug>(Increase_x)x
+  call setline(1, 'Some text')
+  normal! gg$
+  call feedkeys("\<F4>", 'xt')
+  call assert_equal(3, g:foo)
+  call assert_equal('Some text', getline(1))
+  call feedkeys("\<F5>", 'xt')
+  call assert_equal(4, g:foo)
+  call assert_equal('Some te', getline(1))
+  nunmap <Plug>(Increase_x)
+  nunmap <F2>
+  nunmap <F3>
+  nunmap <F4>
+  nunmap <F5>
+  unlet g:foo
+  %bw!
+endfunc
+
+func Test_mouse_drag_mapped_start_select()
+  set mouse=a
+  set selectmode=key,mouse
+  func ClickExpr()
+    call test_setmouse(1, 1)
+    return "\<LeftMouse>"
+  endfunc
+  func DragExpr()
+    call test_setmouse(1, 2)
+    return "\<LeftDrag>"
+  endfunc
+  nnoremap <expr> <F2> ClickExpr()
+  nmap <expr> <F3> DragExpr()
+
+  nnoremap <LeftDrag> <LeftDrag><Cmd><CR>
+  exe "normal \<F2>\<F3>"
+  call assert_equal('s', mode())
+  exe "normal! \<C-\>\<C-N>"
+
+  nunmap <LeftDrag>
+  nunmap <F2>
+  nunmap <F3>
+  delfunc ClickExpr
+  delfunc DragExpr
+  set selectmode&
+  set mouse&
+endfunc
+
+func Test_mouse_drag_statusline()
+  set laststatus=2
+  set mouse=a
+  func ClickExpr()
+    call test_setmouse(&lines - 1, 1)
+    return "\<LeftMouse>"
+  endfunc
+  func DragExpr()
+    call test_setmouse(&lines - 2, 1)
+    return "\<LeftDrag>"
+  endfunc
+  nnoremap <expr> <F2> ClickExpr()
+  nnoremap <expr> <F3> DragExpr()
+
+  " this was causing a crash in win_drag_status_line()
+  call feedkeys("\<F2>:tabnew\<CR>\<F3>", 'tx')
+
+  nunmap <F2>
+  nunmap <F3>
+  delfunc ClickExpr
+  delfunc DragExpr
+  set laststatus& mouse&
+endfunc
+
+" Test for mapping <LeftDrag> in Insert mode
+func Test_mouse_drag_insert_map()
+  set mouse=a
+  func ClickExpr()
+    call test_setmouse(1, 1)
+    return "\<LeftMouse>"
+  endfunc
+  func DragExpr()
+    call test_setmouse(1, 2)
+    return "\<LeftDrag>"
+  endfunc
+  inoremap <expr> <F2> ClickExpr()
+  imap <expr> <F3> DragExpr()
+
+  inoremap <LeftDrag> <LeftDrag><Cmd>let g:dragged = 1<CR>
+  exe "normal i\<F2>\<F3>"
+  call assert_equal(1, g:dragged)
+  call assert_equal('v', mode())
+  exe "normal! \<C-\>\<C-N>"
+  unlet g:dragged
+
+  inoremap <LeftDrag> <LeftDrag><C-\><C-N>
+  exe "normal i\<F2>\<F3>"
+  call assert_equal('n', mode())
+
+  iunmap <LeftDrag>
+  iunmap <F2>
+  iunmap <F3>
+  delfunc ClickExpr
+  delfunc DragExpr
+  set mouse&
+endfunc
+
+func Test_unmap_simplifiable()
+  map <C-I> foo
+  map <Tab> bar
+  call assert_equal('foo', maparg('<C-I>'))
+  call assert_equal('bar', maparg('<Tab>'))
+  unmap <C-I>
+  call assert_equal('', maparg('<C-I>'))
+  call assert_equal('bar', maparg('<Tab>'))
+  unmap <Tab>
+
+  map <C-I> foo
+  unmap <Tab>
+  " This should not error
+  unmap <C-I>
+endfunc
+
+" Test that the first byte of rhs is not remapped if rhs starts with lhs.
+func Test_map_rhs_starts_with_lhs()
+  new
+  func MapExpr()
+    return "\<C-R>\<C-P>"
+  endfunc
+
+  for expr in [v:false, v:true]
+    if expr
+      imap <buffer><expr> <C-R> MapExpr()
+    else
+      imap <buffer> <C-R> <C-R><C-P>
+    endif
+
+    for restore in [v:false, v:true]
+      if restore
+        let saved = maparg('<C-R>', 'i', v:false, v:true)
+        iunmap <buffer> <C-R>
+        call mapset(saved)
+      endif
+
+      let @a = 'foo'
+      call assert_nobeep('call feedkeys("S\<C-R>a", "tx")')
+      call assert_equal('foo', getline('.'))
+
+      let @a = 'bar'
+      call assert_nobeep('call feedkeys("S\<*C-R>a", "tx")')
+      call assert_equal('bar', getline('.'))
+    endfor
+  endfor
+
+  " When two mappings are used for <C-I> and <Tab>, remapping should work.
+  imap <buffer> <C-I> <Tab>bar
+  imap <buffer> <Tab> foo
+  call feedkeys("S\<Tab>", 'xt')
+  call assert_equal('foo', getline('.'))
+  call feedkeys("S\<*C-I>", 'xt')
+  call assert_equal('foobar', getline('.'))
+
+  delfunc MapExpr
+  bwipe!
+endfunc
+
+func Test_expr_map_escape_special()
+  nnoremap … <Cmd>let g:got_ellipsis += 1<CR>
+  func Func()
+    return '…'
+  endfunc
+  nmap <expr> <F2> Func()
+  let g:got_ellipsis = 0
+  call feedkeys("\<F2>", 'xt')
+  call assert_equal(1, g:got_ellipsis)
+  delfunc Func
+  nunmap <F2>
+  unlet g:got_ellipsis
+  nunmap …
+endfunc
+
+" Testing for mapping after an <Nop> mapping is triggered on timeout.
+" Test for what patch 8.1.0052 fixes.
+func Test_map_after_timed_out_nop()
+  CheckRunVimInTerminal
+
+  let lines =<< trim END
+    set timeout timeoutlen=400
+    inoremap ab TEST
+    inoremap a <Nop>
+  END
+  call writefile(lines, 'Xtest_map_after_timed_out_nop', 'D')
+  let buf = RunVimInTerminal('-S Xtest_map_after_timed_out_nop', #{rows: 6})
+
+  " Enter Insert mode
+  call term_sendkeys(buf, 'i')
+  " Wait for the "a" mapping to timeout
+  call term_sendkeys(buf, 'a')
+  call term_wait(buf, 500)
+  " Send "a" and wait for a period shorter than 'timeoutlen'
+  call term_sendkeys(buf, 'a')
+  call term_wait(buf, 100)
+  " Send "b", should trigger the "ab" mapping
+  call term_sendkeys(buf, 'b')
+  call WaitForAssert({-> assert_equal("TEST", term_getline(buf, 1))})
+
+  " clean up
+  call StopVimInTerminal(buf)
+endfunc
+
+" Test 'showcmd' behavior with a partial mapping
+func Test_showcmd_part_map()
+  CheckRunVimInTerminal
+
+  let lines =<< trim END
+    set notimeout showcmd
+    nnoremap ,a <Ignore>
+    nnoremap ;a <Ignore>
+    nnoremap Àa <Ignore>
+    nnoremap Ëa <Ignore>
+    nnoremap βa <Ignore>
+    nnoremap ωa <Ignore>
+    nnoremap …a <Ignore>
+    nnoremap <C-W>a <Ignore>
+  END
+  call writefile(lines, 'Xtest_showcmd_part_map', 'D')
+  let buf = RunVimInTerminal('-S Xtest_showcmd_part_map', #{rows: 6})
+
+  call term_sendkeys(buf, ":set noruler | echo\<CR>")
+  call WaitForAssert({-> assert_equal('', term_getline(buf, 6))})
+
+  for c in [',', ';', 'À', 'Ë', 'β', 'ω', '…']
+    call term_sendkeys(buf, c)
+    call WaitForAssert({-> assert_equal(c, trim(term_getline(buf, 6)))})
+    call term_sendkeys(buf, 'a')
+    call WaitForAssert({-> assert_equal('', trim(term_getline(buf, 6)))})
+  endfor
+
+  call term_sendkeys(buf, "\<C-W>")
+  call WaitForAssert({-> assert_equal('^W', trim(term_getline(buf, 6)))})
+  call term_sendkeys(buf, 'a')
+  call WaitForAssert({-> assert_equal('', trim(term_getline(buf, 6)))})
+
+  " Use feedkeys() as terminal buffer cannot forward unsimplified Ctrl-W.
+  " This is like typing Ctrl-W with modifyOtherKeys enabled.
+  call term_sendkeys(buf, ':call feedkeys("\<*C-W>", "m")' .. " | echo\<CR>")
+  call WaitForAssert({-> assert_equal('^W', trim(term_getline(buf, 6)))})
+  call term_sendkeys(buf, 'a')
+  call WaitForAssert({-> assert_equal('', trim(term_getline(buf, 6)))})
+
+  call StopVimInTerminal(buf)
+endfunc
+
+func Test_using_past_typeahead()
+  nnoremap :00 0
+  exe "norm :set \x80\xfb0=0\<CR>"
+  exe "sil norm :0\x0f\<C-U>\<CR>"
+
+  exe "norm :set \x80\xfb0=\<CR>"
+  nunmap :00
+endfunc
+
+func Test_mapclear_while_listing()
+  CheckRunVimInTerminal
+
+  let lines =<< trim END
+      set nocompatible
+      mapclear
+      for i in range(1, 999)
+        exe 'map ' .. 'foo' .. i .. ' bar'
+      endfor
+      au CmdlineLeave : call timer_start(0, {-> execute('mapclear')})
+  END
+  call writefile(lines, 'Xmapclear', 'D')
+  let buf = RunVimInTerminal('-S Xmapclear', {'rows': 10})
+
+  " this was using freed memory
+  call term_sendkeys(buf, ":map\<CR>")
+  call TermWait(buf, 50)
+  call term_sendkeys(buf, "G")
+  call TermWait(buf, 50)
+  call term_sendkeys(buf, "\<CR>")
+
+  call StopVimInTerminal(buf)
+endfunc
+
 
 " vim: shiftwidth=2 sts=2 expandtab

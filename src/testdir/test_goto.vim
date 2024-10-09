@@ -17,7 +17,7 @@ endfunc
 func Test_gD()
   let lines =<< trim [CODE]
     int x;
-  
+
     int func(void)
     {
       return x;
@@ -30,7 +30,7 @@ endfunc
 func Test_gD_too()
   let lines =<< trim [CODE]
     Filename x;
-  
+
     int Filename
     int func() {
       Filename x;
@@ -44,7 +44,7 @@ func Test_gD_comment()
   let lines =<< trim [CODE]
     /* int x; */
     int x;
-  
+
     int func(void)
     {
       return x;
@@ -58,7 +58,7 @@ func Test_gD_inline_comment()
   let lines =<< trim [CODE]
     int y /* , x */;
     int x;
-  
+
     int func(void)
     {
       return x;
@@ -72,7 +72,7 @@ func Test_gD_string()
   let lines =<< trim [CODE]
     char *s[] = "x";
     int x = 1;
-  
+
     int func(void)
     {
       return x;
@@ -85,7 +85,7 @@ endfunc
 func Test_gD_string_same_line()
   let lines =<< trim [CODE]
     char *s[] = "x", int x = 1;
-  
+
     int func(void)
     {
       return x;
@@ -99,7 +99,7 @@ func Test_gD_char()
   let lines =<< trim [CODE]
     char c = 'x';
     int x = 1;
-  
+
     int func(void)
     {
       return x;
@@ -112,7 +112,7 @@ endfunc
 func Test_gd()
   let lines =<< trim [CODE]
     int x;
-  
+
     int func(int x)
     {
       return x;
@@ -122,13 +122,31 @@ func Test_gd()
   call XTest_goto_decl('gd', lines, 3, 14)
 endfunc
 
+" Using gd to jump to a declaration in a fold
+func Test_gd_with_fold()
+  new
+  let lines =<< trim END
+    #define ONE 1
+    #define TWO 2
+    #define THREE 3
+
+    TWO
+  END
+  call setline(1, lines)
+  1,3fold
+  call feedkeys('Ggd', 'xt')
+  call assert_equal(2, line('.'))
+  call assert_equal(-1, foldclosedend(2))
+  bw!
+endfunc
+
 func Test_gd_not_local()
   let lines =<< trim [CODE]
     int func1(void)
     {
       return x;
     }
-  
+
     int func2(int x)
     {
       return x;
@@ -155,9 +173,9 @@ func Test_gd_missing_braces()
     def func1(a)
       a + 1
     end
-  
+
     a = 1
-  
+
     def func2()
       return a
     end
@@ -234,11 +252,11 @@ func Test_gd_inline_comment_body()
     int func(void)
     {
       int y /* , x */;
-  
+
       for (/* int x = 0 */; y < 2; y++);
-  
+
       int x = 0;
-  
+
       return x;
     }
   [CODE]
@@ -274,10 +292,11 @@ func Test_gd_string()
     {
       char *s = "x";
       int x = 1;
-  
+
       return x;
     }
   [CODE]
+
   call XTest_goto_decl('gd', lines, 4, 7)
 endfunc
 
@@ -286,7 +305,7 @@ func Test_gd_string_only()
     int func(void)
     {
       char *s = "x";
-  
+
       return x;
     }
   [CODE]
@@ -294,18 +313,25 @@ func Test_gd_string_only()
   call XTest_goto_decl('gd', lines, 5, 10)
 endfunc
 
-" Check that setting 'cursorline' does not change curswant
-func Test_cursorline_keep_col()
+" Check that setting some options does not change curswant
+func Test_set_options_keep_col()
   new
   call setline(1, ['long long long line', 'short line'])
   normal ggfi
   let pos = getcurpos()
   normal j
-  set cursorline
+  set invhlsearch spell spelllang=en,cjk spelloptions=camel textwidth=80
+  set cursorline cursorcolumn cursorlineopt=line colorcolumn=+1 winfixbuf
+  set comments=:# commentstring=#%s define=function
+  set background=dark
+  set background=light
   normal k
   call assert_equal(pos, getcurpos())
   bwipe!
-  set nocursorline
+  set hlsearch& spell& spelllang& spelloptions& textwidth&
+  set cursorline& cursorcolumn& cursorlineopt& colorcolumn& winfixbuf&
+  set comments& commentstring& define&
+  set background&
 endfunc
 
 func Test_gd_local_block()
@@ -323,7 +349,7 @@ func Test_gd_local_block()
         char *b = "NULL";
         return b;
       }
-  
+
       return 0;
     }
   [CODE]

@@ -1,7 +1,6 @@
 " Test for textobjects
 
 source check.vim
-CheckFeature textobjects
 
 func CpoM(line, useM, expected)
   new
@@ -41,6 +40,24 @@ func Test_inner_block_with_cpo_M_right_backslash()
   call CpoM('(red (blue\) green)', 1, ['red (blue\) green', 'blue\', 'red (blue\) green'])
 endfunc
 
+func Test_inner_block_single_char()
+  new
+  call setline(1, "(a)")
+
+  set selection=inclusive
+  let @" = ''
+  call assert_nobeep('norm! 0faviby')
+  call assert_equal('a', @")
+
+  set selection=exclusive
+  let @" = ''
+  call assert_nobeep('norm! 0faviby')
+  call assert_equal('a', @")
+
+  set selection&
+  bwipe!
+endfunc
+
 func Test_quote_selection_selection_exclusive()
   new
   call setline(1, "a 'bcde' f")
@@ -49,11 +66,11 @@ func Test_quote_selection_selection_exclusive()
   exe "norm! fdvhi'y"
   call assert_equal('bcde', @")
 
-  let @"='dummy'
+  let @" = 'dummy'
   exe "norm! $gevi'y"
   call assert_equal('bcde', @")
 
-  let @"='dummy'
+  let @" = 'dummy'
   exe "norm! 0fbhvi'y"
   call assert_equal('bcde', @")
 
@@ -88,89 +105,127 @@ endfunc
 
 " Tests for string and html text objects
 func Test_string_html_objects()
-  enew!
 
-  let t = '"wo\"rd\\" foo'
-  put =t
-  normal! da"
-  call assert_equal('foo', getline('.'))
+  for e in ['utf-8', 'latin1', 'cp932']
+    enew!
+    exe 'set enc=' .. e
 
-  let t = "'foo' 'bar' 'piep'"
-  put =t
-  normal! 0va'a'rx
-  call assert_equal("xxxxxxxxxxxx'piep'", getline('.'))
+    let t = '"wo\"rd\\" foo'
+    put =t
+    normal! da"
+    call assert_equal('foo', getline('.'), e)
 
-  let t = "bla bla `quote` blah"
-  put =t
-  normal! 02f`da`
-  call assert_equal("bla bla blah", getline('.'))
+    let t = "'foo' 'bar' 'piep'"
+    put =t
+    normal! 0va'a'rx
+    call assert_equal("xxxxxxxxxxxx'piep'", getline('.'), e)
 
-  let t = 'out " in "noXno"'
-  put =t
-  normal! 0fXdi"
-  call assert_equal('out " in ""', getline('.'))
+    let t = "bla bla `quote` blah"
+    put =t
+    normal! 02f`da`
+    call assert_equal("bla bla blah", getline('.'), e)
 
-  let t = "\"'\" 'blah' rep 'buh'"
-  put =t
-  normal! 03f'vi'ry
-  call assert_equal("\"'\" 'blah'yyyyy'buh'", getline('.'))
+    let t = 'out " in "noXno"'
+    put =t
+    normal! 0fXdi"
+    call assert_equal('out " in ""', getline('.'), e)
 
-  set quoteescape=+*-
-  let t = "bla `s*`d-`+++`l**` b`la"
-  put =t
-  normal! di`
-  call assert_equal("bla `` b`la", getline('.'))
+    let t = "\"'\" 'blah' rep 'buh'"
+    put =t
+    normal! 03f'vi'ry
+    call assert_equal("\"'\" 'blah'yyyyy'buh'", getline('.'), e)
 
-  let t = 'voo "nah" sdf " asdf" sdf " sdf" sd'
-  put =t
-  normal! $F"va"oha"i"rz
-  call assert_equal('voo "zzzzzzzzzzzzzzzzzzzzzzzzzzzzsd', getline('.'))
+    set quoteescape=+*-
+    let t = "bla `s*`d-`+++`l**` b`la"
+    put =t
+    normal! di`
+    call assert_equal("bla `` b`la", getline('.'), e)
 
-  let t = "-<b>asdf<i>Xasdf</i>asdf</b>-"
-  put =t
-  normal! fXdit
-  call assert_equal('-<b>asdf<i></i>asdf</b>-', getline('.'))
+    let t = 'voo "nah" sdf " asdf" sdf " sdf" sd'
+    put =t
+    normal! $F"va"oha"i"rz
+    call assert_equal('voo "zzzzzzzzzzzzzzzzzzzzzzzzzzzzsd', getline('.'), e)
 
-  let t = "-<b>asdX<i>a<i />sdf</i>asdf</b>-"
-  put =t
-  normal! 0fXdit
-  call assert_equal('-<b></b>-', getline('.'))
+    let t = "-<b>asdf<i>Xasdf</i>asdf</b>-"
+    put =t
+    normal! fXdit
+    call assert_equal('-<b>asdf<i></i>asdf</b>-', getline('.'), e)
 
-  let t = "-<b>asdf<i>Xasdf</i>asdf</b>-"
-  put =t
-  normal! fXdat
-  call assert_equal('-<b>asdfasdf</b>-', getline('.'))
+    let t = "-<b>asdX<i>a<i />sdf</i>asdf</b>-"
+    put =t
+    normal! 0fXdit
+    call assert_equal('-<b></b>-', getline('.'), e)
 
-  let t = "-<b>asdX<i>as<b />df</i>asdf</b>-"
-  put =t
-  normal! 0fXdat
-  call assert_equal('--', getline('.'))
+    let t = "-<b>asdf<i>Xasdf</i>asdf</b>-"
+    put =t
+    normal! fXdat
+    call assert_equal('-<b>asdfasdf</b>-', getline('.'), e)
 
-  let t = "-<b>\ninnertext object\n</b>"
-  put =t
-  normal! dit
-  call assert_equal('-<b></b>', getline('.'))
+    let t = "-<b>asdX<i>as<b />df</i>asdf</b>-"
+    put =t
+    normal! 0fXdat
+    call assert_equal('--', getline('.'), e)
 
-  " copy the tag block from leading indentation before the start tag
-  let t = "    <b>\ntext\n</b>"
-  $put =t
-  normal! 2kvaty
-  call assert_equal("<b>\ntext\n</b>", @")
+    let t = "-<b>\ninnertext object\n</b>"
+    put =t
+    normal! dit
+    call assert_equal('-<b></b>', getline('.'), e)
 
-  " copy the tag block from the end tag
-  let t = "<title>\nwelcome\n</title>"
-  $put =t
-  normal! $vaty
-  call assert_equal("<title>\nwelcome\n</title>", @")
+    " copy the tag block from leading indentation before the start tag
+    let t = "    <b>\ntext\n</b>"
+    $put =t
+    normal! 2kvaty
+    call assert_equal("<b>\ntext\n</b>", @", e)
 
-  " copy the outer tag block from a tag without an end tag
-  let t = "<html>\n<title>welcome\n</html>"
-  $put =t
-  normal! k$vaty
-  call assert_equal("<html>\n<title>welcome\n</html>", @")
+    " copy the tag block from the end tag
+    let t = "<title>\nwelcome\n</title>"
+    $put =t
+    normal! $vaty
+    call assert_equal("<title>\nwelcome\n</title>", @", e)
 
-  set quoteescape&
-  enew!
+    " copy the outer tag block from a tag without an end tag
+    let t = "<html>\n<title>welcome\n</html>"
+    $put =t
+    normal! k$vaty
+    call assert_equal("<html>\n<title>welcome\n</html>", @", e)
+
+    " nested tag that has < in a different line from >
+    let t = "<div><div\n></div></div>"
+    $put =t
+    normal! k0vaty
+    call assert_equal("<div><div\n></div></div>", @", e)
+
+    " nested tag with attribute that has < in a different line from >
+    let t = "<div><div\nattr=\"attr\"\n></div></div>"
+    $put =t
+    normal! 2k0vaty
+    call assert_equal("<div><div\nattr=\"attr\"\n></div></div>", @", e)
+
+    " tag, that includes a > in some attribute
+    let t = "<div attr=\"attr >> foo >> bar \">Hello</div>"
+    $put =t
+    normal! fHyit
+    call assert_equal("Hello", @", e)
+
+    " tag, that includes a > in some attribute
+    let t = "<div attr='attr >> foo >> bar '>Hello 123</div>"
+    $put =t
+    normal! fHyit
+    call assert_equal("Hello 123", @", e)
+
+    set quoteescape&
+
+    " this was going beyond the end of the line
+    %del
+    sil! norm i"\
+    sil! norm i"\
+    sil! norm i"\
+    call assert_equal('"\', getline(1))
+
+    bwipe!
+  endfor
+
+  set enc=utf-8
 endfunc
 
 func Test_empty_html_tag()
@@ -187,7 +242,7 @@ func Test_empty_html_tag()
   normal 0f<vitsaaa
   call assert_equal('aaa', getline(1))
 
-  " selecting a tag block in an non-empty blank line should fail
+  " selecting a tag block in a non-empty blank line should fail
   call setline(1, '    ')
   call assert_beeps('normal $vaty')
 
@@ -201,28 +256,28 @@ func Test_match()
   call assert_equal("c", matchstr("abcd", ".", 2, 0))
   call assert_equal("a", matchstr("abcd", ".", 0, -1))
   call assert_equal(-1, match("abcd", ".", 0, 5))
-  call assert_equal(0 , match("abcd", ".", 0, -1))
-  call assert_equal(0 , match('abc', '.', 0, 1))
-  call assert_equal(1 , match('abc', '.', 0, 2))
-  call assert_equal(2 , match('abc', '.', 0, 3))
+  call assert_equal(0, match("abcd", ".", 0, -1))
+  call assert_equal(0, match('abc', '.', 0, 1))
+  call assert_equal(1, match('abc', '.', 0, 2))
+  call assert_equal(2, match('abc', '.', 0, 3))
   call assert_equal(-1, match('abc', '.', 0, 4))
-  call assert_equal(1 , match('abc', '.', 1, 1))
-  call assert_equal(2 , match('abc', '.', 2, 1))
+  call assert_equal(1, match('abc', '.', 1, 1))
+  call assert_equal(2, match('abc', '.', 2, 1))
   call assert_equal(-1, match('abc', '.', 3, 1))
-  call assert_equal(3 , match('abc', '$', 0, 1))
+  call assert_equal(3, match('abc', '$', 0, 1))
   call assert_equal(-1, match('abc', '$', 0, 2))
-  call assert_equal(3 , match('abc', '$', 1, 1))
-  call assert_equal(3 , match('abc', '$', 2, 1))
-  call assert_equal(3 , match('abc', '$', 3, 1))
+  call assert_equal(3, match('abc', '$', 1, 1))
+  call assert_equal(3, match('abc', '$', 2, 1))
+  call assert_equal(3, match('abc', '$', 3, 1))
   call assert_equal(-1, match('abc', '$', 4, 1))
-  call assert_equal(0 , match('abc', '\zs', 0, 1))
-  call assert_equal(1 , match('abc', '\zs', 0, 2))
-  call assert_equal(2 , match('abc', '\zs', 0, 3))
-  call assert_equal(3 , match('abc', '\zs', 0, 4))
+  call assert_equal(0, match('abc', '\zs', 0, 1))
+  call assert_equal(1, match('abc', '\zs', 0, 2))
+  call assert_equal(2, match('abc', '\zs', 0, 3))
+  call assert_equal(3, match('abc', '\zs', 0, 4))
   call assert_equal(-1, match('abc', '\zs', 0, 5))
-  call assert_equal(1 , match('abc', '\zs', 1, 1))
-  call assert_equal(2 , match('abc', '\zs', 2, 1))
-  call assert_equal(3 , match('abc', '\zs', 3, 1))
+  call assert_equal(1, match('abc', '\zs', 1, 1))
+  call assert_equal(2, match('abc', '\zs', 2, 1))
+  call assert_equal(3, match('abc', '\zs', 3, 1))
   call assert_equal(-1, match('abc', '\zs', 4, 1))
 endfunc
 
@@ -311,6 +366,17 @@ func Test_sentence_with_cursor_on_delimiter()
   normal! 17|yas
   call assert_equal("A '([sentence.])'  ", @")
 
+  " don't get stuck on a quote at the start of a sentence
+  %delete _
+  call setline(1, ['A sentence.', '"A sentence"?', 'A sentence!'])
+  normal gg))
+  call assert_equal(3, getcurpos()[1])
+
+  %delete _
+  call setline(1, ['A sentence.', "'A sentence'?", 'A sentence!'])
+  normal gg))
+  call assert_equal(3, getcurpos()[1])
+
   %delete _
 endfunc
 
@@ -346,7 +412,7 @@ func Test_paragraph()
   call assert_beeps("normal Vipip")
   exe "normal \<C-C>"
 
-  close!
+  bw!
 endfunc
 
 " Tests for text object aw
@@ -538,7 +604,179 @@ func Test_textobj_quote()
   normal 0ya'
   call assert_equal("    'special'", @")
 
-  close!
+  " quoted string with odd or even number of backslashes.
+  call setline(1, 'char *s = "foo\"bar"')
+  normal $hhyi"
+  call assert_equal('foo\"bar', @")
+  call setline(1, 'char *s = "foo\\"bar"')
+  normal $hhyi"
+  call assert_equal('bar', @")
+  call setline(1, 'char *s = "foo\\\"bar"')
+  normal $hhyi"
+  call assert_equal('foo\\\"bar', @")
+  call setline(1, 'char *s = "foo\\\\"bar"')
+  normal $hhyi"
+  call assert_equal('bar', @")
+
+  bw!
+endfunc
+
+" Test for i(, i<, etc. when cursor is in front of a block
+func Test_textobj_find_paren_forward()
+  new
+
+  " i< and a> when cursor is in front of a block
+  call setline(1, '#include <foo.h>')
+  normal 0yi<
+  call assert_equal('foo.h', @")
+  normal 0ya>
+  call assert_equal('<foo.h>', @")
+
+  " 2i(, 3i( in front of a block enters second/third nested '('
+  call setline(1, 'foo (bar (baz (quux)))')
+  normal 0yi)
+  call assert_equal('bar (baz (quux))', @")
+  normal 02yi)
+  call assert_equal('baz (quux)', @")
+  normal 03yi)
+  call assert_equal('quux', @")
+
+  " 3i( in front of a block doesn't enter third but un-nested '('
+  call setline(1, 'foo (bar (baz) (quux))')
+  normal 03di)
+  call assert_equal('foo (bar (baz) (quux))', getline(1))
+  normal 02di)
+  call assert_equal('foo (bar () (quux))', getline(1))
+  normal 0di)
+  call assert_equal('foo ()', getline(1))
+
+  bw!
+endfunc
+
+func Test_inner_block_empty_paren()
+  new
+  call setline(1, ["(text)()", "", "(text)(", ")", "", "()()", "", "text()"])
+
+  " Example 1
+  call cursor(1, 1)
+  let @" = ''
+  call assert_beeps(':call feedkeys("0f(viby","xt")')
+  call assert_equal(7, getpos('.')[2])
+  call assert_equal('(', @")
+
+  " Example 2
+  call cursor(3, 1)
+  let @" = ''
+  call assert_beeps('call feedkeys("0f(viby", "xt")')
+  call assert_equal(7, getpos('.')[2])
+  call assert_equal('(', @")
+
+  " Example 3
+  call cursor(6, 1)
+  let @" = ''
+  call assert_beeps('call feedkeys("0f(viby", "xt")')
+  call assert_equal(3, getpos('.')[2])
+  call assert_equal('(', @")
+
+  " Change empty inner block
+  call cursor(8, 1)
+  call feedkeys("0cibtext", "xt")
+  call assert_equal("text(text)", getline('.'))
+
+  bwipe!
+endfunc
+
+func Test_inner_block_empty_bracket()
+  new
+  call setline(1, ["[text][]", "", "[text][", "]", "", "[][]", "", "text[]"])
+
+  " Example 1
+  call cursor(1, 1)
+  let @" = ''
+  call assert_beeps(':call feedkeys("0f[viby","xt")')
+  call assert_equal(7, getpos('.')[2])
+  call assert_equal('[', @")
+
+  " Example 2
+  call cursor(3, 1)
+  let @" = ''
+  call assert_beeps('call feedkeys("0f[viby", "xt")')
+  call assert_equal(7, getpos('.')[2])
+  call assert_equal('[', @")
+
+  " Example 3
+  call cursor(6, 1)
+  let @" = ''
+  call assert_beeps('call feedkeys("0f[viby", "xt")')
+  call assert_equal(3, getpos('.')[2])
+  call assert_equal('[', @")
+
+  " Change empty inner block
+  call cursor(8, 1)
+  call feedkeys("0ci[text", "xt")
+  call assert_equal("text[text]", getline('.'))
+
+  bwipe!
+endfunc
+
+func Test_inner_block_empty_brace()
+  new
+  call setline(1, ["{text}{}", "", "{text}{", "}", "", "{}{}", "", "text{}"])
+
+  " Example 1
+  call cursor(1, 1)
+  let @" = ''
+  call assert_beeps(':call feedkeys("0f{viby","xt")')
+  call assert_equal(7, getpos('.')[2])
+  call assert_equal('{', @")
+
+  " Example 2
+  call cursor(3, 1)
+  let @" = ''
+  call assert_beeps('call feedkeys("0f{viby", "xt")')
+  call assert_equal(7, getpos('.')[2])
+  call assert_equal('{', @")
+
+  " Example 3
+  call cursor(6, 1)
+  let @" = ''
+  call assert_beeps('call feedkeys("0f{viby", "xt")')
+  call assert_equal(3, getpos('.')[2])
+  call assert_equal('{', @")
+
+  " Change empty inner block
+  call cursor(8, 1)
+  call feedkeys("0ciBtext", "xt")
+  call assert_equal("text{text}", getline('.'))
+
+  bwipe!
+endfunc
+
+func Test_inner_block_empty_lessthan()
+  new
+  call setline(1, ["<text><>", "", "<text><", ">", "", "<><>"])
+
+  " Example 1
+  call cursor(1, 1)
+  let @" = ''
+  call assert_beeps(':call feedkeys("0f<viby","xt")')
+  call assert_equal(7, getpos('.')[2])
+  call assert_equal('<', @")
+
+  " Example 2
+  call cursor(3, 1)
+  let @" = ''
+  call assert_beeps('call feedkeys("0f<viby", "xt")')
+  call assert_equal(7, getpos('.')[2])
+  call assert_equal('<', @")
+
+  " Example 3
+  call cursor(6, 1)
+  let @" = ''
+  call assert_beeps('call feedkeys("0f<viby", "xt")')
+  call assert_equal(3, getpos('.')[2])
+  call assert_equal('<', @")
+  bwipe!
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

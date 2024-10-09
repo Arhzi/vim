@@ -17,7 +17,7 @@
  * 1. Memory, allocated with scheme_malloc*, need not to be freed explicitly,
  *    garbage collector will do it self
  * 2. Requires at least NORMAL features. I can't imagine why one may want
- *    to build with SMALL or TINY features but with MzScheme interface.
+ *    to build with TINY features but with MzScheme interface.
  * 3. I don't use K&R-style functions. Anyways, MzScheme headers are ANSI.
  */
 
@@ -139,7 +139,7 @@ static char *string_to_line(Scheme_Object *obj);
 # define OUTPUT_LEN_TYPE long
 #endif
 static void do_output(char *mesg, OUTPUT_LEN_TYPE len);
-static void do_printf(char *format, ...);
+static void do_printf(char *format, ...) ATTRIBUTE_FORMAT_PRINTF(1, 2);
 static void do_flush(void);
 static Scheme_Object *_apply_thunk_catch_exceptions(
 	Scheme_Object *, Scheme_Object **);
@@ -383,7 +383,7 @@ static void (*dll_scheme_set_config_path)(Scheme_Object *p);
 # define scheme_null dll_scheme_null
 # define scheme_true dll_scheme_true
 
-// pointers are GetProceAddress'ed as pointers to pointer
+// pointers are GetProcAddress'ed as pointers to pointer
 #if !defined(USE_THREAD_LOCAL) && !defined(LINK_EXTENSIONS_BY_TABLE)
 #  define scheme_current_thread (*dll_scheme_current_thread_ptr)
 # endif
@@ -668,14 +668,14 @@ mzscheme_runtime_link_init(char *sch_dll, char *gc_dll, int verbose)
     if (!hMzGC)
     {
 	if (verbose)
-	    semsg(_(e_loadlib), gc_dll);
+	    semsg(_(e_could_not_load_library_str_str), gc_dll, GetWin32Error());
 	return FAIL;
     }
 
     if (!hMzSch)
     {
 	if (verbose)
-	    semsg(_(e_loadlib), sch_dll);
+	    semsg(_(e_could_not_load_library_str_str), sch_dll, GetWin32Error());
 	return FAIL;
     }
 
@@ -689,7 +689,7 @@ mzscheme_runtime_link_init(char *sch_dll, char *gc_dll, int verbose)
 	    FreeLibrary(hMzGC);
 	    hMzGC = 0;
 	    if (verbose)
-		semsg(_(e_loadfunc), thunk->name);
+		semsg(_(e_could_not_load_library_function_str), thunk->name);
 	    return FAIL;
 	}
     }
@@ -703,7 +703,7 @@ mzscheme_runtime_link_init(char *sch_dll, char *gc_dll, int verbose)
 	    FreeLibrary(hMzGC);
 	    hMzGC = 0;
 	    if (verbose)
-		semsg(_(e_loadfunc), thunk->name);
+		semsg(_(e_could_not_load_library_function_str), thunk->name);
 	    return FAIL;
 	}
     }
@@ -809,13 +809,9 @@ static UINT timer_id = 0;
 #elif defined(FEAT_GUI_GTK)
 static gboolean timer_proc(gpointer);
 static guint timer_id = 0;
-#elif defined(FEAT_GUI_MOTIF) || defined(FEAT_GUI_ATHENA)
+#elif defined(FEAT_GUI_MOTIF)
 static void timer_proc(XtPointer, XtIntervalId *);
 static XtIntervalId timer_id = (XtIntervalId)0;
-#elif defined(FEAT_GUI_MAC)
-pascal void timer_proc(EventLoopTimerRef, void *);
-static EventLoopTimerRef timer_id = NULL;
-static EventLoopTimerUPP timerUPP;
 #endif
 
 #if !defined(FEAT_GUI_MSWIN) || defined(VIMDLL) // Win32 console and Unix
@@ -849,18 +845,15 @@ timer_proc(HWND hwnd UNUSED, UINT uMsg UNUSED, UINT_PTR idEvent UNUSED, DWORD dw
 # elif defined(FEAT_GUI_GTK)
     static gboolean
 timer_proc(gpointer data UNUSED)
-# elif defined(FEAT_GUI_MOTIF) || defined(FEAT_GUI_ATHENA)
+# elif defined(FEAT_GUI_MOTIF)
     static void
 timer_proc(XtPointer timed_out UNUSED, XtIntervalId *interval_id UNUSED)
-# elif defined(FEAT_GUI_MAC)
-    pascal void
-timer_proc(EventLoopTimerRef theTimer UNUSED, void *userData UNUSED)
 # endif
 {
     scheme_check_threads();
 # if defined(FEAT_GUI_GTK)
     return TRUE; // continue receiving notifications
-# elif defined(FEAT_GUI_MOTIF) || defined(FEAT_GUI_ATHENA)
+# elif defined(FEAT_GUI_MOTIF)
     // renew timeout
     if (mz_threads_allow && p_mzq > 0)
 	timer_id = XtAppAddTimeOut(app_context, p_mzq,
@@ -875,12 +868,8 @@ setup_timer(void)
     timer_id = SetTimer(NULL, 0, p_mzq, timer_proc);
 # elif defined(FEAT_GUI_GTK)
     timer_id = g_timeout_add((guint)p_mzq, (GSourceFunc)timer_proc, NULL);
-# elif defined(FEAT_GUI_MOTIF) || defined(FEAT_GUI_ATHENA)
+# elif defined(FEAT_GUI_MOTIF)
     timer_id = XtAppAddTimeOut(app_context, p_mzq, timer_proc, NULL);
-# elif defined(FEAT_GUI_MAC)
-    timerUPP = NewEventLoopTimerUPP(timer_proc);
-    InstallEventLoopTimer(GetMainEventLoop(), p_mzq * kEventDurationMillisecond,
-		p_mzq * kEventDurationMillisecond, timerUPP, NULL, &timer_id);
 # endif
 }
 
@@ -891,25 +880,26 @@ remove_timer(void)
     KillTimer(NULL, timer_id);
 # elif defined(FEAT_GUI_GTK)
     g_source_remove(timer_id);
-# elif defined(FEAT_GUI_MOTIF) || defined(FEAT_GUI_ATHENA)
+# elif defined(FEAT_GUI_MOTIF)
     XtRemoveTimeOut(timer_id);
-# elif defined(FEAT_GUI_MAC)
-    RemoveEventLoopTimer(timer_id);
-    DisposeEventLoopTimerUPP(timerUPP);
 # endif
     timer_id = 0;
 }
 
-    void
-mzvim_reset_timer(void)
+#endif // MZSCHEME_GUI_THREADS
+
+    char *
+did_set_mzquantum(optset_T *args UNUSED)
 {
+#if defined(MZSCHEME_GUI_THREADS)
+    // reset timer
     if (timer_id != 0)
 	remove_timer();
     if (mz_threads_allow && p_mzq > 0 && gui.in_use)
 	setup_timer();
+#endif
+    return NULL;
 }
-
-#endif // MZSCHEME_GUI_THREADS
 
     static void
 notify_multithread(int on)
@@ -934,7 +924,7 @@ mzscheme_end(void)
 #endif
 }
 
-#if HAVE_TLS_SPACE
+#if HAVE_TLS_SPACE && !defined(VIMDLL)
 # if defined(_MSC_VER)
 static __declspec(thread) void *tls_space;
 extern intptr_t _tls_index;
@@ -970,7 +960,24 @@ mzscheme_main(void)
     }
 #endif
 #ifdef HAVE_TLS_SPACE
+# ifdef VIMDLL
+    void **ptls_space;
+    intptr_t tls_index;
+    void (*pget_tls_info)(void ***ptls_space, intptr_t *ptls_index);
+
+    // Get the address of get_tls_info() from (g)vim.exe.
+    pget_tls_info = (void *)GetProcAddress(
+				GetModuleHandle(NULL), "get_tls_info");
+    if (pget_tls_info == NULL)
+    {
+	disabled = TRUE;
+	return vim_main2();
+    }
+    pget_tls_info(&ptls_space, &tls_index);
+    scheme_register_tls_space(ptls_space, tls_index);
+# else
     scheme_register_tls_space(&tls_space, _tls_index);
+# endif
 #endif
 #ifdef TRAMPOLINED_MZVIM_STARTUP
     return scheme_main_setup(TRUE, mzscheme_env_main, argc, &argv);
@@ -1256,13 +1263,13 @@ mzscheme_init(void)
 #ifdef DYNAMIC_MZSCHEME
 	if (disabled || !mzscheme_enabled(TRUE))
 	{
-	    emsg(_("E815: Sorry, this command is disabled, the MzScheme libraries could not be loaded."));
+	    emsg(_(e_sorry_this_command_is_disabled_the_mzscheme_libraries_could_not_be_loaded));
 	    return -1;
 	}
 #endif
 	if (load_base_module_failed || startup_mzscheme())
 	{
-	    emsg(_("E895: Sorry, this command is disabled, the MzScheme's racket/base module could not be loaded."));
+	    emsg(_(e_sorry_this_command_is_disabled_the_mzscheme_racket_base_module_could_not_be_loaded));
 	    return -1;
 	}
 	initialized = TRUE;
@@ -1366,24 +1373,24 @@ do_mzscheme_command(exarg_T *eap, void *data, Scheme_Closed_Prim *what)
     void
 mzscheme_buffer_free(buf_T *buf)
 {
-    if (buf->b_mzscheme_ref)
-    {
-	vim_mz_buffer *bp = NULL;
-	MZ_GC_DECL_REG(1);
-	MZ_GC_VAR_IN_REG(0, bp);
-	MZ_GC_REG();
+    if (buf->b_mzscheme_ref == NULL)
+	return;
 
-	bp = BUFFER_REF(buf);
-	bp->buf = INVALID_BUFFER_VALUE;
-#ifndef MZ_PRECISE_GC
-	scheme_gc_ptr_ok(bp);
+    vim_mz_buffer *bp = NULL;
+    MZ_GC_DECL_REG(1);
+    MZ_GC_VAR_IN_REG(0, bp);
+    MZ_GC_REG();
+
+    bp = BUFFER_REF(buf);
+    bp->buf = INVALID_BUFFER_VALUE;
+#ifdef MZ_PRECISE_GC
+    scheme_free_immobile_box(buf->b_mzscheme_ref);
 #else
-	scheme_free_immobile_box(buf->b_mzscheme_ref);
+    scheme_gc_ptr_ok(bp);
 #endif
-	buf->b_mzscheme_ref = NULL;
-	MZ_GC_CHECK();
-	MZ_GC_UNREG();
-    }
+    buf->b_mzscheme_ref = NULL;
+    MZ_GC_CHECK();
+    MZ_GC_UNREG();
 }
 
 /*
@@ -1392,23 +1399,23 @@ mzscheme_buffer_free(buf_T *buf)
     void
 mzscheme_window_free(win_T *win)
 {
-    if (win->w_mzscheme_ref)
-    {
-	vim_mz_window *wp = NULL;
-	MZ_GC_DECL_REG(1);
-	MZ_GC_VAR_IN_REG(0, wp);
-	MZ_GC_REG();
-	wp = WINDOW_REF(win);
-	wp->win = INVALID_WINDOW_VALUE;
-#ifndef MZ_PRECISE_GC
-	scheme_gc_ptr_ok(wp);
+    if (win->w_mzscheme_ref == NULL)
+	return;
+
+    vim_mz_window *wp = NULL;
+    MZ_GC_DECL_REG(1);
+    MZ_GC_VAR_IN_REG(0, wp);
+    MZ_GC_REG();
+    wp = WINDOW_REF(win);
+    wp->win = INVALID_WINDOW_VALUE;
+#ifdef MZ_PRECISE_GC
+    scheme_free_immobile_box(win->w_mzscheme_ref);
 #else
-	scheme_free_immobile_box(win->w_mzscheme_ref);
+    scheme_gc_ptr_ok(wp);
 #endif
-	win->w_mzscheme_ref = NULL;
-	MZ_GC_CHECK();
-	MZ_GC_UNREG();
-    }
+    win->w_mzscheme_ref = NULL;
+    MZ_GC_CHECK();
+    MZ_GC_UNREG();
 }
 
 /*
@@ -1420,15 +1427,15 @@ ex_mzscheme(exarg_T *eap)
     char_u	*script;
 
     script = script_get(eap, eap->arg);
-    if (!eap->skip)
+    if (eap->skip)
+	return;
+
+    if (script == NULL)
+	do_mzscheme_command(eap, eap->arg, do_eval);
+    else
     {
-	if (script == NULL)
-	    do_mzscheme_command(eap, eap->arg, do_eval);
-	else
-	{
-	    do_mzscheme_command(eap, script, do_eval);
-	    vim_free(script);
-	}
+	do_mzscheme_command(eap, script, do_eval);
+	vim_free(script);
     }
 }
 
@@ -1503,20 +1510,20 @@ ex_mzfile(exarg_T *eap)
     static void
 init_exn_catching_apply(void)
 {
-    if (!exn_catching_apply)
-    {
-	char *e =
-	    "(lambda (thunk) "
-		"(with-handlers ([void (lambda (exn) (cons #f exn))]) "
-		"(cons #t (thunk))))";
+    if (exn_catching_apply)
+	return;
 
-	exn_catching_apply = scheme_eval_string(e, environment);
-	MZ_GC_CHECK();
-	exn_p = scheme_builtin_value("exn?");
-	MZ_GC_CHECK();
-	exn_message = scheme_builtin_value("exn-message");
-	MZ_GC_CHECK();
-    }
+    char *e =
+	"(lambda (thunk) "
+	"(with-handlers ([void (lambda (exn) (cons #f exn))]) "
+	"(cons #t (thunk))))";
+
+    exn_catching_apply = scheme_eval_string(e, environment);
+    MZ_GC_CHECK();
+    exn_p = scheme_builtin_value("exn?");
+    MZ_GC_CHECK();
+    exn_message = scheme_builtin_value("exn-message");
+    MZ_GC_CHECK();
 }
 
 /*
@@ -1645,7 +1652,7 @@ vim_command(void *data, int argc, Scheme_Object **argv)
 
     // may be use do_cmdline_cmd?
     do_cmdline(BYTE_STRING_VALUE(cmd), NULL, NULL, DOCMD_NOWAIT|DOCMD_VERBOSE);
-    update_screen(VALID);
+    update_screen(UPD_VALID);
 
     MZ_GC_UNREG();
     raise_if_error();
@@ -1726,10 +1733,10 @@ get_option(void *data, int argc, Scheme_Object **argv)
     Vim_Prim	    *prim = (Vim_Prim *)data;
     long	    value;
     char	    *strval;
-    int		    rc;
+    getoption_T	    rc;
     Scheme_Object   *rval = NULL;
     Scheme_Object   *name = NULL;
-    int		    opt_flags = 0;
+    int		    scope = 0;
     buf_T	    *save_curb = curbuf;
     win_T	    *save_curw = curwin;
 
@@ -1750,11 +1757,11 @@ get_option(void *data, int argc, Scheme_Object **argv)
 	}
 
 	if (argv[1] == M_global)
-	    opt_flags = OPT_GLOBAL;
+	    scope = OPT_GLOBAL;
 	else if (SCHEME_VIMBUFFERP(argv[1]))
 	{
 	    curbuf = get_valid_buffer(argv[1]);
-	    opt_flags = OPT_LOCAL;
+	    scope = OPT_LOCAL;
 	}
 	else if (SCHEME_VIMWINDOWP(argv[1]))
 	{
@@ -1762,33 +1769,36 @@ get_option(void *data, int argc, Scheme_Object **argv)
 
 	    curwin = win;
 	    curbuf = win->w_buffer;
-	    opt_flags = OPT_LOCAL;
+	    scope = OPT_LOCAL;
 	}
 	else
 	    scheme_wrong_type(prim->name, "vim-buffer/window", 1, argc, argv);
     }
 
-    rc = get_option_value(BYTE_STRING_VALUE(name), &value, (char_u **)&strval, opt_flags);
+    rc = get_option_value(BYTE_STRING_VALUE(name), &value, (char_u **)&strval,
+								  NULL, scope);
     curbuf = save_curb;
     curwin = save_curw;
 
     switch (rc)
     {
-    case 1:
+    case gov_bool:
+    case gov_number:
 	MZ_GC_UNREG();
 	return scheme_make_integer_value(value);
-    case 0:
+    case gov_string:
 	rval = scheme_make_byte_string(strval);
 	MZ_GC_CHECK();
 	vim_free(strval);
 	MZ_GC_UNREG();
 	return rval;
-    case -1:
-    case -2:
+    case gov_hidden_bool:
+    case gov_hidden_number:
+    case gov_hidden_string:
 	MZ_GC_UNREG();
 	raise_vim_exn(_("hidden option"));
 	//NOTREACHED
-    case -3:
+    case gov_unknown:
 	MZ_GC_UNREG();
 	raise_vim_exn(_("unknown option"));
 	//NOTREACHED
@@ -1804,7 +1814,7 @@ get_option(void *data, int argc, Scheme_Object **argv)
 set_option(void *data, int argc, Scheme_Object **argv)
 {
     char_u	*command = NULL;
-    int		opt_flags = 0;
+    int		scope = 0;
     buf_T	*save_curb = curbuf;
     win_T	*save_curw = curwin;
     Vim_Prim	*prim = (Vim_Prim *)data;
@@ -1825,18 +1835,18 @@ set_option(void *data, int argc, Scheme_Object **argv)
 	}
 
 	if (argv[1] == M_global)
-	    opt_flags = OPT_GLOBAL;
+	    scope = OPT_GLOBAL;
 	else if (SCHEME_VIMBUFFERP(argv[1]))
 	{
 	    curbuf = get_valid_buffer(argv[1]);
-	    opt_flags = OPT_LOCAL;
+	    scope = OPT_LOCAL;
 	}
 	else if (SCHEME_VIMWINDOWP(argv[1]))
 	{
 	    win_T *win = get_valid_window(argv[1]);
 	    curwin = win;
 	    curbuf = win->w_buffer;
-	    opt_flags = OPT_LOCAL;
+	    scope = OPT_LOCAL;
 	}
 	else
 	    scheme_wrong_type(prim->name, "vim-buffer/window", 1, argc, argv);
@@ -1845,9 +1855,9 @@ set_option(void *data, int argc, Scheme_Object **argv)
     // do_set can modify cmd, make copy
     command = vim_strsave(BYTE_STRING_VALUE(cmd));
     MZ_GC_UNREG();
-    do_set(command, opt_flags);
+    do_set(command, scope);
     vim_free(command);
-    update_screen(NOT_VALID);
+    update_screen(UPD_NOT_VALID);
     curbuf = save_curb;
     curwin = save_curw;
     raise_if_error();
@@ -1928,10 +1938,10 @@ window_new(win_T *win)
     MZ_GC_REG();
     self = scheme_malloc_fail_ok(scheme_malloc_tagged, sizeof(vim_mz_window));
     CLEAR_POINTER(self);
-#ifndef MZ_PRECISE_GC
-    scheme_dont_gc_ptr(self);	// because win isn't visible to GC
-#else
+#ifdef MZ_PRECISE_GC
     win->w_mzscheme_ref = scheme_malloc_immobile_box(NULL);
+#else
+    scheme_dont_gc_ptr(self);	// because win isn't visible to GC
 #endif
     MZ_GC_CHECK();
     WINDOW_REF(win) = self;
@@ -2117,7 +2127,7 @@ set_cursor(void *data, int argc, Scheme_Object **argv)
     win->win->w_cursor.lnum = lnum;
     win->win->w_cursor.col = col;
     win->win->w_set_curswant = TRUE;
-    update_screen(VALID);
+    update_screen(UPD_VALID);
 
     raise_if_error();
     return scheme_void;
@@ -2312,10 +2322,10 @@ buffer_new(buf_T *buf)
     MZ_GC_REG();
     self = scheme_malloc_fail_ok(scheme_malloc_tagged, sizeof(vim_mz_buffer));
     CLEAR_POINTER(self);
-#ifndef MZ_PRECISE_GC
-    scheme_dont_gc_ptr(self);	// because buf isn't visible to GC
-#else
+#ifdef MZ_PRECISE_GC
     buf->b_mzscheme_ref = scheme_malloc_immobile_box(NULL);
+#else
+    scheme_dont_gc_ptr(self);	// because buf isn't visible to GC
 #endif
     MZ_GC_CHECK();
     BUFFER_REF(buf) = self;
@@ -2792,7 +2802,7 @@ insert_buffer_line_list(void *data, int argc, Scheme_Object **argv)
 	}
 
 	curbuf = savebuf;
-	update_screen(VALID);
+	update_screen(UPD_VALID);
 
 	MZ_GC_UNREG();
 	raise_if_error();
@@ -2852,7 +2862,7 @@ insert_buffer_line_list(void *data, int argc, Scheme_Object **argv)
 	free_array(array);
 	MZ_GC_UNREG();
 	curbuf = savebuf;
-	update_screen(VALID);
+	update_screen(UPD_VALID);
     }
 
     MZ_GC_UNREG();
@@ -3020,13 +3030,11 @@ vim_to_mzscheme_impl(typval_T *vim_value, int depth, Scheme_Hash_Table *visited)
 	result = scheme_make_integer((long)vim_value->vval.v_number);
 	MZ_GC_CHECK();
     }
-# ifdef FEAT_FLOAT
     else if (vim_value->v_type == VAR_FLOAT)
     {
 	result = scheme_make_double((double)vim_value->vval.v_float);
 	MZ_GC_CHECK();
     }
-# endif
     else if (vim_value->v_type == VAR_LIST)
     {
 	list_T		*list = vim_value->vval.v_list;
@@ -3076,7 +3084,7 @@ vim_to_mzscheme_impl(typval_T *vim_value, int depth, Scheme_Hash_Table *visited)
 	    hashitem_T	*hi;
 	    dictitem_T	*di;
 
-	    for (hi = ht->ht_array; todo > 0; ++hi)
+	    FOR_ALL_HASHTAB_ITEMS(ht, hi, todo)
 	    {
 		if (!HASHITEM_EMPTY(hi))
 		{
@@ -3219,13 +3227,11 @@ mzscheme_to_vim_impl(Scheme_Object *obj, typval_T *tv, int depth,
 	tv->v_type = VAR_BOOL;
 	tv->vval.v_number = SCHEME_TRUEP(obj);
     }
-# ifdef FEAT_FLOAT
     else if (SCHEME_DBLP(obj))
     {
 	tv->v_type = VAR_FLOAT;
 	tv->vval.v_float = SCHEME_DBL_VAL(obj);
     }
-# endif
     else if (SCHEME_BYTE_STRINGP(obj))
     {
 	tv->v_type = VAR_STRING;
@@ -3810,7 +3816,7 @@ make_modules(void)
     mod = scheme_primitive_module(vimext_symbol, environment);
     MZ_GC_CHECK();
     // all prims made closed so they can access their own names
-    for (i = 0; i < (int)(sizeof(prims)/sizeof(prims[0])); i++)
+    for (i = 0; i < (int)ARRAY_LENGTH(prims); i++)
     {
 	Vim_Prim *prim = prims + i;
 	closed_prim = scheme_make_closed_prim_w_arity(prim->prim, prim, prim->name,
@@ -3842,44 +3848,45 @@ sandbox_check(void)
     static Scheme_Object *
 sandbox_file_guard(int argc UNUSED, Scheme_Object **argv)
 {
-    if (sandbox)
+    if (!sandbox)
+	return scheme_void;
+
+    Scheme_Object *requested_access = argv[2];
+
+    if (M_write == NULL)
     {
-	Scheme_Object *requested_access = argv[2];
-
-	if (M_write == NULL)
-	{
-	    MZ_REGISTER_STATIC(M_write);
-	    M_write = scheme_intern_symbol("write");
-	    MZ_GC_CHECK();
-	}
-	if (M_read == NULL)
-	{
-	    MZ_REGISTER_STATIC(M_read);
-	    M_read = scheme_intern_symbol("read");
-	    MZ_GC_CHECK();
-	}
-	if (M_execute == NULL)
-	{
-	    MZ_REGISTER_STATIC(M_execute);
-	    M_execute = scheme_intern_symbol("execute");
-	    MZ_GC_CHECK();
-	}
-	if (M_delete == NULL)
-	{
-	    MZ_REGISTER_STATIC(M_delete);
-	    M_delete = scheme_intern_symbol("delete");
-	    MZ_GC_CHECK();
-	}
-
-	while (!SCHEME_NULLP(requested_access))
-	{
-	    Scheme_Object *item = SCHEME_CAR(requested_access);
-	    if (scheme_eq(item, M_write) || scheme_eq(item, M_read)
-		    || scheme_eq(item, M_execute) || scheme_eq(item, M_delete))
-		raise_vim_exn(_("not allowed in the Vim sandbox"));
-	    requested_access = SCHEME_CDR(requested_access);
-	}
+	MZ_REGISTER_STATIC(M_write);
+	M_write = scheme_intern_symbol("write");
+	MZ_GC_CHECK();
     }
+    if (M_read == NULL)
+    {
+	MZ_REGISTER_STATIC(M_read);
+	M_read = scheme_intern_symbol("read");
+	MZ_GC_CHECK();
+    }
+    if (M_execute == NULL)
+    {
+	MZ_REGISTER_STATIC(M_execute);
+	M_execute = scheme_intern_symbol("execute");
+	MZ_GC_CHECK();
+    }
+    if (M_delete == NULL)
+    {
+	MZ_REGISTER_STATIC(M_delete);
+	M_delete = scheme_intern_symbol("delete");
+	MZ_GC_CHECK();
+    }
+
+    while (!SCHEME_NULLP(requested_access))
+    {
+	Scheme_Object *item = SCHEME_CAR(requested_access);
+	if (scheme_eq(item, M_write) || scheme_eq(item, M_read)
+		|| scheme_eq(item, M_execute) || scheme_eq(item, M_delete))
+	    raise_vim_exn(_("not allowed in the Vim sandbox"));
+	requested_access = SCHEME_CDR(requested_access);
+    }
+
     return scheme_void;
 }
 

@@ -15,6 +15,7 @@ LANGUAGES = \
 		fi \
 		fr \
 		ga \
+		hu \
 		it \
 		ja \
 		ja.euc-jp \
@@ -59,6 +60,7 @@ POFILES = \
 		fi.po \
 		fr.po \
 		ga.po \
+		hu.po \
 		it.po \
 		ja.po \
 		ja.euc-jp.po \
@@ -102,10 +104,10 @@ MOFILES = \
 		fi.mo \
 		fr.mo \
 		ga.mo \
+		hu.mo \
 		it.mo \
 		ja.mo \
 		ko.UTF-8.mo \
-		ko.mo \
 		lv.mo \
 		nb.mo \
 		nl.mo \
@@ -120,21 +122,22 @@ MOFILES = \
 		uk.mo \
 		vi.mo \
 		zh_CN.UTF-8.mo \
-		zh_CN.mo \
 		zh_TW.UTF-8.mo \
-		zh_TW.mo \
 
 
 MOCONVERTED = \
 		cs.cp1250.mo \
 		ja.euc-jp.mo \
 		ja.sjis.mo \
+		ko.mo \
 		pl.UTF-8.mo \
 		pl.cp1250.mo \
 		ru.cp1251.mo \
 		sk.cp1250.mo \
 		uk.cp1251.mo \
+		zh_CN.mo \
 		zh_CN.cp936.mo \
+		zh_TW.mo \
 
 
 CHECKFILES = \
@@ -150,6 +153,7 @@ CHECKFILES = \
 		fi.ck \
 		fr.ck \
 		ga.ck \
+		hu.ck \
 		it.ck \
 		ja.ck \
 		ja.euc-jp.ck \
@@ -180,3 +184,13 @@ CHECKFILES = \
 		zh_TW.UTF-8.ck \
 		zh_TW.ck \
 
+PO_VIM_INPUTLIST = \
+	../../runtime/optwin.vim \
+	../../runtime/defaults.vim
+
+PO_VIM_JSLIST = \
+	optwin.js \
+	defaults.js
+
+# Arguments for xgettext to pick up messages to translate from the source code.
+XGETTEXT_KEYWORDS = --keyword=_ --keyword=N_ --keyword=NGETTEXT:1,2 --keyword=PLURAL_MSG:2,4

@@ -1,15 +1,5 @@
 " Tests for 'backspace' settings
 
-func Exec(expr)
-  let str=''
-  try
-    exec a:expr
-  catch /.*/
-    let str=v:exception
-  endtry
-  return str
-endfunc
-
 func Test_backspace_option()
   set backspace=
   call assert_equal('', &backspace)
@@ -41,10 +31,10 @@ func Test_backspace_option()
   set backspace-=eol
   call assert_equal('', &backspace)
   " Check the error
-  call assert_equal(0, match(Exec('set backspace=ABC'), '.*E474'))
-  call assert_equal(0, match(Exec('set backspace+=def'), '.*E474'))
+  call assert_fails('set backspace=ABC', 'E474:')
+  call assert_fails('set backspace+=def', 'E474:')
   " NOTE: Vim doesn't check following error...
-  "call assert_equal(0, match(Exec('set backspace-=ghi'), '.*E474'))
+  "call assert_fails('set backspace-=ghi', 'E474:')
 
   " Check backwards compatibility with version 5.4 and earlier
   set backspace=0
@@ -55,8 +45,8 @@ func Test_backspace_option()
   call assert_equal('2', &backspace)
   set backspace=3
   call assert_equal('3', &backspace)
-  call assert_false(match(Exec('set backspace=4'), '.*E474'))
-  call assert_false(match(Exec('set backspace=10'), '.*E474'))
+  call assert_fails('set backspace=4', 'E474:')
+  call assert_fails('set backspace=10', 'E474:')
 
   " Cleared when 'compatible' is set
   set compatible
@@ -146,6 +136,34 @@ func Test_backspace_ctrl_u()
   set visualbell&vim
   set backspace&vim
   close!
+endfunc
+
+" Test for setting 'backspace' to a number value (for backward compatibility)
+func Test_backspace_number_value()
+  new
+
+  set backspace=0
+  call setline(1, ['one two', 'three four'])
+  call cursor(2, 1)
+  exe "normal! A\<C-W>\<C-U>"
+  call assert_equal('three four', getline(2))
+
+  set backspace=1
+  exe "normal! A\<CR>five\<C-W>\<C-U>\<C-W>\<C-U>"
+  call assert_equal(['one two', 'three four'], getline(1, '$'))
+
+  set backspace=2
+  call cursor(2, 7)
+  exe "normal! ihalf\<C-U>"
+  call assert_equal('three four', getline(2))
+
+  set backspace=3
+  call cursor(2, 7)
+  exe "normal! ihalf\<C-U>"
+  call assert_equal('four', getline(2))
+
+  bw!
+  set backspace&
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

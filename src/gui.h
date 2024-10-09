@@ -11,22 +11,15 @@
 # include <Xm/Xm.h>
 #endif
 
-#ifdef FEAT_GUI_ATHENA
-# include <X11/Intrinsic.h>
-# include <X11/StringDefs.h>
-#endif
-
 #ifdef FEAT_GUI_GTK
-# ifdef VMS // undef MIN and MAX because Intrinsic.h redefines them anyway
-#  ifdef MAX
-#   undef MAX
-#  endif
-#  ifdef MIN
-#   undef MIN
-#  endif
+# ifdef VMS
+#  include "gui_gtk_vms.h"
 # endif
 # include <X11/Intrinsic.h>
+# pragma GCC diagnostic push
+# pragma GCC diagnostic ignored "-Wstrict-prototypes"
 # include <gtk/gtk.h>
+# pragma GCC diagnostic pop
 #endif
 
 #ifdef FEAT_GUI_HAIKU
@@ -35,27 +28,8 @@
 
 // Needed when generating prototypes, since FEAT_GUI is always defined then.
 #if defined(FEAT_XCLIPBOARD) && !defined(FEAT_GUI_MOTIF) \
-	&& !defined(FEAT_GUI_ATHENA) && !defined(FEAT_GUI_GTK)
+	&& !defined(FEAT_GUI_GTK)
 # include <X11/Intrinsic.h>
-#endif
-
-#ifdef FEAT_GUI_MAC
-# include <Types.h>
-/*# include <Memory.h>*/
-# include <Quickdraw.h>
-# include <Fonts.h>
-# include <Events.h>
-# include <Menus.h>
-# if !(defined (TARGET_API_MAC_CARBON) && (TARGET_API_MAC_CARBON))
-#  include <Windows.h>
-# endif
-# include <Controls.h>
-/*# include <TextEdit.h>*/
-# include <Dialogs.h>
-# include <OSUtils.h>
-/*
-# include <ToolUtils.h>
-# include <SegLoad.h>*/
 #endif
 
 #ifdef FEAT_GUI_PHOTON
@@ -68,7 +42,7 @@
  * On some systems scrolling needs to be done right away instead of in the
  * main loop.
  */
-#if defined(FEAT_GUI_MSWIN) || defined(FEAT_GUI_MAC) || defined(FEAT_GUI_GTK)
+#if defined(FEAT_GUI_MSWIN) || defined(FEAT_GUI_GTK)
 # define USE_ON_FLY_SCROLL
 #endif
 
@@ -77,7 +51,6 @@
  */
 #if (defined(FEAT_DND) && defined(FEAT_GUI_GTK)) \
 	|| defined(FEAT_GUI_MSWIN) \
-	|| defined(FEAT_GUI_MAC) \
 	|| defined(FEAT_GUI_HAIKU)
 # define HAVE_DROP_FILE
 #endif
@@ -119,7 +92,7 @@
 #endif
 
 // Indices for arrays of scrollbars
-#define SBAR_NONE	    -1
+#define SBAR_NONE	    (-1)
 #define SBAR_LEFT	    0
 #define SBAR_RIGHT	    1
 #define SBAR_BOTTOM	    2
@@ -179,9 +152,6 @@ typedef struct GuiScrollbar
     win_T	*wp;		// Scrollbar's window, NULL for bottom
     int		type;		// one of SBAR_{LEFT,RIGHT,BOTTOM}
     long	value;		// Represents top line number visible
-#ifdef FEAT_GUI_ATHENA
-    int		pixval;		// pixel count of value
-#endif
     long	size;		// Size of scrollbar thumb
     long	max;		// Number of lines in buffer
 
@@ -206,11 +176,8 @@ typedef struct GuiScrollbar
 				// to reduce the count.
 #endif
 
-#if FEAT_GUI_HAIKU
+#ifdef FEAT_GUI_HAIKU
     VimScrollBar *id;		// Pointer to real scroll bar
-#endif
-#ifdef FEAT_GUI_MAC
-    ControlHandle id;		// A handle to the scrollbar
 #endif
 #ifdef FEAT_GUI_PHOTON
     PtWidget_t	*id;
@@ -220,10 +187,10 @@ typedef struct GuiScrollbar
 typedef long	    guicolor_T;	// handle for a GUI color; for X11 this should
 				// be "Pixel", but that's an unsigned and we
 				// need a signed value
-#define INVALCOLOR (guicolor_T)-11111	// number for invalid color; on 32 bit
+#define INVALCOLOR ((guicolor_T)-11111)	// number for invalid color; on 32 bit
 				   // displays there is a tiny chance this is an
 				   // actual color
-#define CTERMCOLOR (guicolor_T)-11110	// only used for cterm.bg_rgb and
+#define CTERMCOLOR ((guicolor_T)-11110)	// only used for cterm.bg_rgb and
 					// cterm.fg_rgb: use cterm color
 
 #ifdef FEAT_GUI_GTK
@@ -292,6 +259,7 @@ typedef struct Gui
     int		scrollbar_height;   // Height of horizontal scrollbar
     int		left_sbar_x;	    // Calculated x coord for left scrollbar
     int		right_sbar_x;	    // Calculated x coord for right scrollbar
+    int         force_redraw;       // Force a redraw even e.g. not resized
 
 #ifdef FEAT_MENU
 # ifndef FEAT_GUI_GTK
@@ -299,9 +267,6 @@ typedef struct Gui
     int		menu_width;	    // Width of the menu bar
 # endif
     char	menu_is_active;	    // TRUE if menu is present
-# ifdef FEAT_GUI_ATHENA
-    char	menu_height_fixed;  // TRUE if menu height fixed
-# endif
 #endif
 
     scrollbar_T bottom_sbar;	    // Bottom scrollbar
@@ -355,12 +320,6 @@ typedef struct Gui
     char	*rsrc_scroll_bg_name;	// Color of scrollbar background
     guicolor_T	scroll_bg_pixel;	// Same in Pixel format
 
-# ifdef FEAT_GUI_MOTIF
-    guicolor_T	menu_def_fg_pixel;  // Default menu foreground
-    guicolor_T	menu_def_bg_pixel;  // Default menu background
-    guicolor_T	scroll_def_fg_pixel;  // Default scrollbar foreground
-    guicolor_T	scroll_def_bg_pixel;  // Default scrollbar background
-# endif
     Display	*dpy;		    // X display
     Window	wid;		    // Window id of text area
     int		visibility;	    // Is shell partially/fully obscured?
@@ -415,7 +374,6 @@ typedef struct Gui
 # endif
 # ifdef USE_GTK3
     cairo_surface_t *surface;       // drawarea surface
-    gboolean	     by_signal;     // cause of draw operation
 # else
     GdkGC	*text_gc;	    // cached GC for normal text
 # endif
@@ -433,18 +391,19 @@ typedef struct Gui
     guint32	event_time;
 #endif	// FEAT_GUI_GTK
 
+#if defined(FEAT_GUI_GTK) || defined(FEAT_GUI_MSWIN)
+    char_u ligatures_map[256];	    // ascii map for characters 0-255, value is
+				    // 1 if in 'guiligatures'
+#endif
+
 #if defined(FEAT_GUI_TABLINE) \
 	&& (defined(FEAT_GUI_MSWIN) || defined(FEAT_GUI_MOTIF) \
-		|| defined(FEAT_GUI_MAC) || defined(FEAT_GUI_HAIKU))
+		|| defined(FEAT_GUI_HAIKU))
     int		tabline_height;
 #endif
 
-#ifdef FEAT_FOOTER
-    int		footer_height;	    // height of the message footer
-#endif
-
 #if defined(FEAT_TOOLBAR) \
-	&& (defined(FEAT_GUI_ATHENA) || defined(FEAT_GUI_MOTIF) || defined(FEAT_GUI_HAIKU))
+	&& (defined(FEAT_GUI_MOTIF) || defined(FEAT_GUI_HAIKU) || defined(FEAT_GUI_MSWIN))
     int		toolbar_height;	    // height of the toolbar
 #endif
 
@@ -471,14 +430,6 @@ typedef struct Gui
     VimFormView *vimForm;
     VimTextAreaView *vimTextArea;
     int	vdcmp;			    // Vim Direct Communication Message Port
-#endif
-
-#ifdef FEAT_GUI_MAC
-    WindowPtr	VimWindow;
-    MenuHandle	MacOSHelpMenu;	    // Help menu provided by the MacOS
-    int		MacOSHelpItems;	    // Nr of help-items supplied by MacOS
-    WindowPtr	wid;		    // Window id of text area
-    int		visibility;	    // Is window partially/fully obscured?
 #endif
 
 #ifdef FEAT_GUI_PHOTON
@@ -599,6 +550,6 @@ typedef enum
 # endif
 #endif // FEAT_GUI_GTK
 
-#if defined(UNIX) && !defined(FEAT_GUI_MAC)
+#if defined(UNIX)
 # define GUI_MAY_FORK
 #endif

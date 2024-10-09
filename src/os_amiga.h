@@ -91,6 +91,7 @@ typedef long off_t;
 # include <limits.h>
 # include <errno.h>
 # include <pwd.h>
+# include <grp.h>
 # include <dirent.h>
 #endif
 
@@ -127,24 +128,6 @@ typedef long off_t;
 #endif
 #ifndef DFLT_HELPFILE
 # define DFLT_HELPFILE	"$VIMRUNTIME/doc/help.txt"
-#endif
-#ifndef FILETYPE_FILE
-# define FILETYPE_FILE	"filetype.vim"
-#endif
-#ifndef FTPLUGIN_FILE
-# define FTPLUGIN_FILE	"ftplugin.vim"
-#endif
-#ifndef INDENT_FILE
-# define INDENT_FILE	"indent.vim"
-#endif
-#ifndef FTOFF_FILE
-# define FTOFF_FILE	"ftoff.vim"
-#endif
-#ifndef FTPLUGOF_FILE
-# define FTPLUGOF_FILE	"ftplugof.vim"
-#endif
-#ifndef INDOFF_FILE
-# define INDOFF_FILE	"indoff.vim"
 #endif
 #ifndef SYNTAX_FNAME
 # define SYNTAX_FNAME	"$VIMRUNTIME/syntax/%s.vim"
@@ -216,7 +199,7 @@ typedef long off_t;
 #endif
 
 #ifndef DFLT_VDIR
-# define DFLT_VDIR	"$VIM/vimfiles/view"	// default for 'viewdir'
+# define DFLT_VDIR	"home:vimfiles/view"	// default for 'viewdir'
 #endif
 
 #ifndef DFLT_MAXMEM

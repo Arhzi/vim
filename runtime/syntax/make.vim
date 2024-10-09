@@ -3,7 +3,7 @@
 " Maintainer:	Roland Hieber <rohieb+vim-iR0jGdkV@rohieb.name>, <https://github.com/rohieb>
 " Previous Maintainer:	Claudio Fleiner <claudio@fleiner.com>
 " URL:		https://github.com/vim/vim/blob/master/runtime/syntax/make.vim
-" Last Change:	2020 May 03
+" Last Change:	2022 Nov 06
 
 " quit when a syntax file was already loaded
 if exists("b:current_syntax")
@@ -28,8 +28,13 @@ syn match makePreCondit "^!\s*\(cmdswitches\|error\|message\|include\|if\|ifdef\
 syn case match
 
 " identifiers
-syn region makeIdent	start="\$(" skip="\\)\|\\\\" end=")" contains=makeStatement,makeIdent
-syn region makeIdent	start="\${" skip="\\}\|\\\\" end="}" contains=makeStatement,makeIdent
+if exists("b:make_microsoft") || exists("make_microsoft")
+  syn region makeIdent	start="\$(" end=")" contains=makeStatement,makeIdent
+  syn region makeIdent	start="\${" end="}" contains=makeStatement,makeIdent
+else
+  syn region makeIdent	start="\$(" skip="\\)\|\\\\" end=")" contains=makeStatement,makeIdent
+  syn region makeIdent	start="\${" skip="\\}\|\\\\" end="}" contains=makeStatement,makeIdent
+endif
 syn match makeIdent	"\$\$\w*"
 syn match makeIdent	"\$[^({]"
 syn match makeIdent	"^ *[^:#= \t]*\s*[:+?!*]="me=e-2
@@ -45,19 +50,19 @@ syn match makeImplicit		"^\.[A-Za-z0-9_./\t -]\+\s*:$"me=e-1
 syn match makeImplicit		"^\.[A-Za-z0-9_./\t -]\+\s*:[^=]"me=e-2
 
 syn region makeTarget transparent matchgroup=makeTarget
-	\ start="^[~A-Za-z0-9_./$()%-][A-Za-z0-9_./\t $()%-]*:\{1,2}[^:=]"rs=e-1
-	\ end=";"re=e-1,me=e-1 end="[^\\]$"
+	\ start="^[~A-Za-z0-9_./$(){}%-][A-Za-z0-9_./\t ${}()%-]*&\?:\?:\{1,2}[^:=]"rs=e-1
+	\ end="[^\\]$"
 	\ keepend contains=makeIdent,makeSpecTarget,makeNextLine,makeComment,makeDString
 	\ skipnl nextGroup=makeCommands
-syn match makeTarget		"^[~A-Za-z0-9_./$()%*@-][A-Za-z0-9_./\t $()%*@-]*::\=\s*$"
+syn match makeTarget           "^[~A-Za-z0-9_./$(){}%*@-][A-Za-z0-9_./\t $(){}%*@-]*&\?::\=\s*$"
 	\ contains=makeIdent,makeSpecTarget,makeComment
 	\ skipnl nextgroup=makeCommands,makeCommandError
 
 syn region makeSpecTarget	transparent matchgroup=makeSpecTarget
-	\ start="^\.\(SUFFIXES\|PHONY\|DEFAULT\|PRECIOUS\|IGNORE\|SILENT\|EXPORT_ALL_VARIABLES\|KEEP_STATE\|LIBPATTERNS\|NOTPARALLEL\|DELETE_ON_ERROR\|INTERMEDIATE\|POSIX\|SECONDARY\)\>\s*:\{1,2}[^:=]"rs=e-1
+	\ start="^\.\(SUFFIXES\|PHONY\|DEFAULT\|PRECIOUS\|IGNORE\|SILENT\|EXPORT_ALL_VARIABLES\|KEEP_STATE\|LIBPATTERNS\|NOTPARALLEL\|DELETE_ON_ERROR\|INTERMEDIATE\|POSIX\|SECONDARY\|ONESHELL\)\>\s*:\{1,2}[^:=]"rs=e-1
 	\ end="[^\\]$" keepend
 	\ contains=makeIdent,makeSpecTarget,makeNextLine,makeComment skipnl nextGroup=makeCommands
-syn match makeSpecTarget	"^\.\(SUFFIXES\|PHONY\|DEFAULT\|PRECIOUS\|IGNORE\|SILENT\|EXPORT_ALL_VARIABLES\|KEEP_STATE\|LIBPATTERNS\|NOTPARALLEL\|DELETE_ON_ERROR\|INTERMEDIATE\|POSIX\|SECONDARY\)\>\s*::\=\s*$"
+syn match makeSpecTarget	"^\.\(SUFFIXES\|PHONY\|DEFAULT\|PRECIOUS\|IGNORE\|SILENT\|EXPORT_ALL_VARIABLES\|KEEP_STATE\|LIBPATTERNS\|NOTPARALLEL\|DELETE_ON_ERROR\|INTERMEDIATE\|POSIX\|SECONDARY\|ONESHELL\)\>\s*::\=\s*$"
 	\ contains=makeIdent,makeComment
 	\ skipnl nextgroup=makeCommands,makeCommandError
 
@@ -78,11 +83,13 @@ syn match makeOverride	"^ *override\>"
 syn match makeStatement contained "(\(abspath\|addprefix\|addsuffix\|and\|basename\|call\|dir\|error\|eval\|file\|filter-out\|filter\|findstring\|firstword\|flavor\|foreach\|guile\|if\|info\|join\|lastword\|notdir\|or\|origin\|patsubst\|realpath\|shell\|sort\|strip\|subst\|suffix\|value\|warning\|wildcard\|word\|wordlist\|words\)\>"ms=s+1
 
 " Comment
-if exists("make_microsoft")
-   syn match  makeComment "#.*" contains=@Spell,makeTodo
-elseif !exists("make_no_comments")
-   syn region  makeComment	start="#" end="^$" end="[^\\]$" keepend contains=@Spell,makeTodo
-   syn match   makeComment	"#$" contains=@Spell
+if !exists("make_no_comments")
+  if exists("b:make_microsoft") || exists("make_microsoft")
+    syn match   makeComment	"#.*" contains=@Spell,makeTodo
+  else
+    syn region  makeComment	start="#" end="^$" end="[^\\]$" keepend contains=@Spell,makeTodo
+    syn match   makeComment	"#$" contains=@Spell
+  endif
 endif
 syn keyword makeTodo TODO FIXME XXX contained
 
