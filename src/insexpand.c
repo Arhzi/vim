@@ -105,8 +105,7 @@ struct compl_S
     int		cp_flags;		// CP_ values
     int		cp_number;		// sequence number
     int		cp_score;		// fuzzy match score
-    int		cp_user_abbr_hlattr;	// highlight attribute to combine with
-					// for abbr.
+    int		cp_user_abbr_hlattr;	// highlight attribute for abbr
     int		cp_user_kind_hlattr;	// highlight attribute for kind
 };
 
@@ -2688,16 +2687,17 @@ did_set_thesaurusfunc(optset_T *args UNUSED)
 {
     int	retval;
 
-    if (*curbuf->b_p_tsrfu != NUL)
-    {
+    if (args->os_flags & OPT_LOCAL)
 	// buffer-local option set
 	retval = option_set_callback_func(curbuf->b_p_tsrfu,
 							&curbuf->b_tsrfu_cb);
-    }
     else
     {
 	// global option set
 	retval = option_set_callback_func(p_tsrfu, &tsrfu_cb);
+	// when using :set, free the local callback
+	if (!(args->os_flags & OPT_GLOBAL))
+	    free_callback(&curbuf->b_tsrfu_cb);
     }
 
     return retval == FAIL ? e_invalid_argument : NULL;

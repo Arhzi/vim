@@ -1,4 +1,4 @@
-*version9.txt*  For Vim version 9.1.  Last change: 2024 Oct 08
+*version9.txt*  For Vim version 9.1.  Last change: 2024 Nov 03
 
 
 		  VIM REFERENCE MANUAL    by Bram Moolenaar
@@ -41598,6 +41598,14 @@ Changed~
 - the regex engines match correctly case-insensitive multi-byte characters
   (and apply proper case folding)
 - |:keeppatterns| preserves the last substitute pattern when used with |:s|
+- |setqflist()| and |setloclist()| can optionally try to preserve the current
+  selection in the quickfix list with the "u" action.
+- the putty terminal is detected using an |TermResponse| autocommand in
+  |defaults.vim| and Vim switches to a dark background
+- the |help-TOC| package is included to ease navigating the documentation.
+- an interactive tutor plugin has been included |vim-tutor-mode|, can be
+  started via |:Tutor|
+- improve the |vimtutor| and add a second chapter for more advanced tips
 
 							*added-9.2*
 Added ~
@@ -41647,6 +41655,8 @@ Options: ~
 
 'completeitemalign'	Order of |complete-items| in Insert mode completion
 			popup
+'findfunc'		Vim function to obtain the results for a |:find|
+			command
 'winfixbuf'		Keep buffer focused in a window
 'tabclose'		Which tab page to focus after closing a tab page
 't_xo'			Terminal uses XON/XOFF handshaking (e.g. vt420)

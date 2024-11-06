@@ -777,10 +777,7 @@ pum_redraw(void)
 			}
 
 			if (attrs != NULL)
-			{
-			    vim_free(attrs);
-			    attrs = NULL;
-			}
+			    VIM_CLEAR(attrs);
 
 			if (*p != TAB)
 			    break;
@@ -790,14 +787,14 @@ pum_redraw(void)
 			if (pum_rl)
 			{
 			    screen_puts_len((char_u *)"  ", 2, row, col - 1,
-								    orig_attr);
+								    attr);
 			    col -= 2;
 			}
 			else
 #endif
 			{
 			    screen_puts_len((char_u *)"  ", 2, row, col,
-								    orig_attr);
+								    attr);
 			    col += 2;
 			}
 			totwidth += 2;
@@ -826,7 +823,7 @@ pum_redraw(void)
 	    if (pum_rl)
 	    {
 		screen_fill(row, row + 1, pum_col - basic_width - n + 1,
-						    col + 1, ' ', ' ', attr);
+						    col + 1, ' ', ' ', orig_attr);
 		col = pum_col - basic_width - n;
 	    }
 	    else
@@ -842,11 +839,11 @@ pum_redraw(void)
 #ifdef FEAT_RIGHTLEFT
 	if (pum_rl)
 	    screen_fill(row, row + 1, pum_col - pum_width + 1, col + 1, ' ',
-								    ' ', attr);
+								    ' ', orig_attr);
 	else
 #endif
 	    screen_fill(row, row + 1, col, pum_col + pum_width, ' ', ' ',
-									attr);
+									orig_attr);
 	if (pum_scrollbar > 0)
 	{
 #ifdef FEAT_RIGHTLEFT
