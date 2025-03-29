@@ -239,7 +239,7 @@ endif
 
 # Get the default ARCH.
 ifndef ARCH
-ARCH := $(shell $(CC) -dumpmachine | sed -e 's/-.*//' -e 's/_/-/' -e 's/^mingw32$$/i686/')
+ARCH := $(shell $(CC) -dumpmachine | sed -e "s/-.*//" -e "s/_/-/" -e "s/^mingw32$$/i686/")
 endif
 
 
@@ -817,6 +817,7 @@ OBJ = \
 	$(OUTDIR)/indent.o \
 	$(OUTDIR)/insexpand.o \
 	$(OUTDIR)/json.o \
+	$(OUTDIR)/linematch.o \
 	$(OUTDIR)/list.o \
 	$(OUTDIR)/locale.o \
 	$(OUTDIR)/logfile.o \
@@ -864,6 +865,7 @@ OBJ = \
 	$(OUTDIR)/textobject.o \
 	$(OUTDIR)/textprop.o \
 	$(OUTDIR)/time.o \
+	$(OUTDIR)/tuple.o \
 	$(OUTDIR)/typval.o \
 	$(OUTDIR)/ui.o \
 	$(OUTDIR)/undo.o \

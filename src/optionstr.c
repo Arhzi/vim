@@ -30,8 +30,9 @@ static char *(p_briopt_values[]) = {"shift:", "min:", "sbr", "list:", "column:",
 #endif
 #if defined(FEAT_DIFF)
 // Note: Keep this in sync with diffopt_changed()
-static char *(p_dip_values[]) = {"filler", "context:", "iblank", "icase", "iwhite", "iwhiteall", "iwhiteeol", "horizontal", "vertical", "closeoff", "hiddenoff", "foldcolumn:", "followwrap", "internal", "indent-heuristic", "algorithm:", NULL};
+static char *(p_dip_values[]) = {"filler", "context:", "iblank", "icase", "iwhite", "iwhiteall", "iwhiteeol", "horizontal", "vertical", "closeoff", "hiddenoff", "foldcolumn:", "followwrap", "internal", "indent-heuristic", "algorithm:", "inline:", "linematch:", NULL};
 static char *(p_dip_algorithm_values[]) = {"myers", "minimal", "patience", "histogram", NULL};
+static char *(p_dip_inline_values[]) = {"none", "simple", "char", "word", NULL};
 #endif
 static char *(p_nf_values[]) = {"bin", "octal", "hex", "alpha", "unsigned", "blank", NULL};
 static char *(p_ff_values[]) = {FF_UNIX, FF_DOS, FF_MAC, NULL};
@@ -94,7 +95,7 @@ static char *(p_ttym_values[]) = {"xterm", "xterm2", "dec", "netterm", "jsbterm"
 #endif
 static char *(p_ve_values[]) = {"block", "insert", "all", "onemore", "none", "NONE", NULL};
 // Note: Keep this in sync with check_opt_wim()
-static char *(p_wim_values[]) = {"full", "longest", "list", "lastused", NULL};
+static char *(p_wim_values[]) = {"full", "longest", "list", "lastused", "noselect", NULL};
 static char *(p_wop_values[]) = {"fuzzy", "tagfile", "pum", NULL};
 #ifdef FEAT_WAK
 static char *(p_wak_values[]) = {"yes", "menu", "no", NULL};
@@ -120,7 +121,8 @@ static char *(p_fdm_values[]) = {"manual", "expr", "marker", "indent", "syntax",
 				NULL};
 static char *(p_fcl_values[]) = {"all", NULL};
 #endif
-static char *(p_cot_values[]) = {"menu", "menuone", "longest", "preview", "popup", "popuphidden", "noinsert", "noselect", "fuzzy", NULL};
+static char *(p_cfc_values[]) = {"keyword", "files", "whole_line", NULL};
+static char *(p_cot_values[]) = {"menu", "menuone", "longest", "preview", "popup", "popuphidden", "noinsert", "noselect", "fuzzy", "nosort", "preinsert", NULL};
 #ifdef BACKSLASH_IN_FILENAME
 static char *(p_csl_values[]) = {"slash", "backslash", NULL};
 #endif
@@ -146,6 +148,7 @@ didset_string_options(void)
     (void)opt_strings_flags(p_cmp, p_cmp_values, &cmp_flags, TRUE);
     (void)opt_strings_flags(p_bkc, p_bkc_values, &bkc_flags, TRUE);
     (void)opt_strings_flags(p_bo, p_bo_values, &bo_flags, TRUE);
+    (void)opt_strings_flags(p_cfc, p_cfc_values, &cfc_flags, TRUE);
     (void)opt_strings_flags(p_cot, p_cot_values, &cot_flags, TRUE);
 #ifdef FEAT_SESSION
     (void)opt_strings_flags(p_ssop, p_ssop_values, &ssop_flags, TRUE);
@@ -1647,6 +1650,31 @@ expand_set_completeopt(optexpand_T *args, int *numMatches, char_u ***matches)
 }
 
 /*
+ * The 'completefuzzycollect' option is changed.
+ */
+    char *
+did_set_completefuzzycollect(optset_T *args UNUSED)
+{
+    if (opt_strings_flags(p_cfc, p_cfc_values, &cfc_flags, TRUE) != OK)
+	return e_invalid_argument;
+    return NULL;
+}
+
+    int
+expand_set_completefuzzycollect(
+	optexpand_T *args,
+	int *numMatches,
+	char_u ***matches)
+{
+    return expand_set_opt_string(
+	    args,
+	    p_cfc_values,
+	    ARRAY_LENGTH(p_cfc_values) - 1,
+	    numMatches,
+	    matches);
+}
+
+/*
  * The 'completeitemalign' option is changed.
  */
     char *
@@ -1990,6 +2018,18 @@ expand_set_diffopt(optexpand_T *args, int *numMatches, char_u ***matches)
 		    numMatches,
 		    matches);
 	}
+	// Within "inline:", we have a subgroup of possible options.
+	int inline_len = (int)STRLEN("inline:");
+	if (xp->xp_pattern - args->oe_set_arg >= inline_len &&
+		STRNCMP(xp->xp_pattern - inline_len, "inline:", inline_len) == 0)
+	{
+	    return expand_set_opt_string(
+		    args,
+		    p_dip_inline_values,
+		    ARRAY_LENGTH(p_dip_inline_values) - 1,
+		    numMatches,
+		    matches);
+	}
 	return FAIL;
     }
 
@@ -2150,29 +2190,34 @@ expand_set_encoding(optexpand_T *args, int *numMatches, char_u ***matches)
 }
 
 /*
- * The 'eventignore' option is changed.
+ * The 'eventignore(win)' option is changed.
  */
     char *
-did_set_eventignore(optset_T *args UNUSED)
+did_set_eventignore(optset_T *args)
 {
-    if (check_ei() == FAIL)
+    char_u	**varp = (char_u **)args->os_varp;
+
+    if (check_ei(*varp) == FAIL)
 	return e_invalid_argument;
     return NULL;
 }
 
+static int expand_eiw = FALSE;
+
     static char_u *
 get_eventignore_name(expand_T *xp, int idx)
 {
-    // 'eventignore' allows special keyword "all" in addition to
+    // 'eventignore(win)' allows special keyword "all" in addition to
     // all event names.
     if (idx == 0)
 	return (char_u *)"all";
-    return get_event_name_no_group(xp, idx - 1);
+    return get_event_name_no_group(xp, idx - 1, expand_eiw);
 }
 
     int
 expand_set_eventignore(optexpand_T *args, int *numMatches, char_u ***matches)
 {
+    expand_eiw = args->oe_varp != (char_u *)&p_ei;
     return expand_set_opt_generic(
 	    args,
 	    get_eventignore_name,
@@ -3040,6 +3085,30 @@ did_set_matchpairs(optset_T *args)
     return NULL;
 }
 
+/*
+ * Process the updated 'messagesopt' option value.
+ */
+    char *
+did_set_messagesopt(optset_T *args UNUSED)
+{
+    if (messagesopt_changed() == FAIL)
+	return e_invalid_argument;
+
+    return NULL;
+}
+
+    int
+expand_set_messagesopt(optexpand_T *args, int *numMatches, char_u ***matches)
+{
+    static char *(p_mopt_values[]) = {"hit-enter", "wait:", "history:", NULL};
+    return expand_set_opt_string(
+	    args,
+	    p_mopt_values,
+	    ARRAY_LENGTH(p_mopt_values) - 1,
+	    numMatches,
+	    matches);
+}
+
 #if defined(FEAT_SPELL) || defined(PROTO)
 /*
  * The 'mkspellmem' option is changed.
@@ -3330,7 +3399,12 @@ parse_statustabline_rulerformat(optset_T *args, int rulerformat)
 	if (wid && *s == '(' && (errmsg = check_stl_option(p_ruf)) == NULL)
 	    ru_wid = wid;
 	else
-	    errmsg = check_stl_option(p_ruf);
+	{
+	    // Validate the flags in 'rulerformat' only if it doesn't point to
+	    // a custom function ("%!" flag).
+	    if ((*varp)[1] != '!')
+		errmsg = check_stl_option(p_ruf);
+	}
     }
     // check 'statusline' or 'tabline' only if it doesn't start with "%!"
     else if (rulerformat || s[0] != '%' || s[1] != '!')
@@ -4618,10 +4692,13 @@ did_set_string_option(
 	    setmouse();		    // in case 'mouse' changed
     }
 
-#if defined(FEAT_LUA) || defined(PROTO)
     if (varp == &p_rtp)
+    {
+	export_myvimdir();
+#if defined(FEAT_LUA) || defined(PROTO)
 	update_package_paths_in_lua();
 #endif
+    }
 
 #if defined(FEAT_LINEBREAK)
     // Changing Formatlistpattern when briopt includes the list setting:
@@ -4774,4 +4851,38 @@ restore_shm_value(void)
 	set_option_value_give_err((char_u *)"shm", 0L, shm_buf, 0);
 	vim_memset(shm_buf, 0, SHM_LEN);
     }
+}
+
+/*
+ * Export the environment variable $MYVIMDIR to the first item in runtimepath
+ */
+    void
+export_myvimdir()
+{
+    int		dofree = FALSE;
+    char_u	*p;
+    char_u	*q = p_rtp;
+    char_u	*buf = alloc(MAXPATHL);
+
+    if (buf == NULL)
+	return;
+
+    (void)copy_option_part(&q, buf, MAXPATHL, ",");
+
+    p = vim_getenv((char_u *)"MYVIMDIR", &dofree);
+
+    if (p == NULL || STRCMP(p, buf) != 0)
+    {
+	add_pathsep(buf);
+#ifdef MSWIN
+	// normalize path separators
+	for (q = buf; *q != NUL; q++)
+	    if (*q == '/')
+		*q = '\\';
+#endif
+	vim_setenv((char_u *)"MYVIMDIR", buf);
+    }
+    if (dofree)
+	vim_free(p);
+    vim_free(buf);
 }

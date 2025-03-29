@@ -14234,7 +14234,7 @@ fi
 if test "x$vim_cv_timer_create" = "xyes" ||
    test "x$vim_cv_timer_create_with_lrt" = "xyes"; then
   save_LIBS="$LIBS"
-  if test "x$vim_cv_timer_create_works" = "xyes" ; then
+  if test "x$vim_cv_timer_create_with_lrt" = "xyes" ; then
     LIBS="$LIBS -lrt"
   fi
 
@@ -14297,7 +14297,6 @@ printf "%s\n" "$vim_cv_timer_create_works" >&6; }
   if test "x$vim_cv_timer_create_works" = "xyes" ; then
     printf "%s\n" "#define HAVE_TIMER_CREATE 1" >>confdefs.h
 
-    LIBS="$LIBS -lrt"
   else
     LIBS="$save_LIBS"
   fi
@@ -15942,6 +15941,30 @@ if ac_fn_c_try_link "$LINENO"
 then :
   { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 printf "%s\n" "yes" >&6; }; printf "%s\n" "#define HAVE_DGETTEXT 1" >>confdefs.h
+
+else $as_nop
+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for dngettext" >&5
+printf %s "checking for dngettext... " >&6; }
+		{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
+printf "%s\n" "no" >&6; }
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.beam \
+    conftest$ac_exeext conftest.$ac_ext
+      cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <libintl.h>
+int
+main (void)
+{
+dngettext("DOMAIN", "Test single", "Test plural", 1);
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"
+then :
+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+printf "%s\n" "yes" >&6; }; printf "%s\n" "#define HAVE_DNGETTEXT 1" >>confdefs.h
 
 else $as_nop
   { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5

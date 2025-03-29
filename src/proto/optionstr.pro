@@ -42,6 +42,8 @@ char *did_set_complete(optset_T *args);
 int expand_set_complete(optexpand_T *args, int *numMatches, char_u ***matches);
 char *did_set_completeopt(optset_T *args);
 int expand_set_completeopt(optexpand_T *args, int *numMatches, char_u ***matches);
+char *did_set_completefuzzycollect(optset_T *args);
+int expand_set_completefuzzycollect(optexpand_T *args, int *numMatches, char_u ***matches);
 char *did_set_completeitemalign(optset_T *args);
 char *did_set_completepopup(optset_T *args);
 char *did_set_completeslash(optset_T *args);
@@ -111,6 +113,8 @@ int expand_set_keyprotocol(optexpand_T *args, int *numMatches, char_u ***matches
 char *did_set_lispoptions(optset_T *args);
 int expand_set_lispoptions(optexpand_T *args, int *numMatches, char_u ***matches);
 char *did_set_matchpairs(optset_T *args);
+char *did_set_messagesopt(optset_T *args);
+int expand_set_messagesopt(optexpand_T *args, int *numMatches, char_u ***matches);
 char *did_set_mkspellmem(optset_T *args);
 char *did_set_mouse(optset_T *args);
 int expand_set_mouse(optexpand_T *args, int *numMatches, char_u ***matches);
@@ -158,6 +162,7 @@ char *did_set_swapsync(optset_T *args);
 int expand_set_swapsync(optexpand_T *args, int *numMatches, char_u ***matches);
 char *did_set_switchbuf(optset_T *args);
 int expand_set_switchbuf(optexpand_T *args, int *numMatches, char_u ***matches);
+char *did_set_tabclose(optset_T *args);
 int expand_set_tabclose(optexpand_T *args, int *numMatches, char_u ***matches);
 char *did_set_tabline(optset_T *args);
 char *did_set_tagcase(optset_T *args);
@@ -196,4 +201,5 @@ char *did_set_string_option(int opt_idx, char_u **varp, char_u *oldval, char_u *
 int check_ff_value(char_u *p);
 void save_clear_shm_value(void);
 void restore_shm_value(void);
+void export_myvimdir(void);
 /* vim: set ft=c : */

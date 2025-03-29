@@ -381,6 +381,7 @@ SRC = \
 	insexpand.c \
 	job.c \
 	json.c \
+	linematch.c \
 	list.c \
 	locale.c \
 	logfile.c \
@@ -432,6 +433,7 @@ SRC = \
 	textobject.c \
 	textprop.c \
 	time.c \
+	tuple.c \
 	typval.c \
 	ui.c \
 	undo.c \
@@ -514,6 +516,7 @@ OBJ = \
 	insexpand.obj \
 	job.obj \
 	json.obj \
+	linematch.obj \
 	list.obj \
 	locale.obj \
 	logfile.obj \
@@ -565,6 +568,7 @@ OBJ = \
 	textobject.obj \
 	textprop.obj \
 	time.obj \
+	tuple.obj \
 	typval.obj \
 	ui.obj \
 	undo.obj \
@@ -986,6 +990,9 @@ job.obj : job.c vim.h [.auto]config.h feature.h os_unix.h
 json.obj : json.c vim.h [.auto]config.h feature.h os_unix.h   \
  ascii.h keymap.h termdefs.h macros.h structs.h regexp.h gui.h beval.h \
  [.proto]gui_beval.pro option.h ex_cmds.h proto.h errors.h globals.h
+linematch.obj : linematch.c vim.h [.auto]config.h feature.h os_unix.h   \
+ ascii.h keymap.h termdefs.h macros.h structs.h regexp.h gui.h beval.h \
+ [.proto]gui_beval.pro option.h ex_cmds.h proto.h errors.h globals.h
 list.obj : list.c vim.h [.auto]config.h feature.h os_unix.h \
  ascii.h keymap.h termdefs.h macros.h option.h structs.h regexp.h gui.h \
  beval.h [.proto]gui_beval.pro alloc.h ex_cmds.h spell.h proto.h \
@@ -1162,6 +1169,9 @@ textprop.obj : textprop.c vim.h [.auto]config.h feature.h os_unix.h   \
  ascii.h keymap.h termdefs.h macros.h structs.h regexp.h gui.h beval.h \
  [.proto]gui_beval.pro option.h ex_cmds.h proto.h errors.h globals.h
 time.obj : time.c vim.h [.auto]config.h feature.h os_unix.h   \
+ ascii.h keymap.h termdefs.h macros.h structs.h regexp.h gui.h beval.h \
+ [.proto]gui_beval.pro option.h ex_cmds.h proto.h errors.h globals.h
+tuple.obj : tuple.c vim.h [.auto]config.h feature.h os_unix.h   \
  ascii.h keymap.h termdefs.h macros.h structs.h regexp.h gui.h beval.h \
  [.proto]gui_beval.pro option.h ex_cmds.h proto.h errors.h globals.h
 typval.obj : typval.c vim.h [.auto]config.h feature.h os_unix.h   \

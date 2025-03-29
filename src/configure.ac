@@ -3908,7 +3908,7 @@ dnl works, on Solaris timer_create() exists but fails at runtime.
 if test "x$vim_cv_timer_create" = "xyes" ||
    test "x$vim_cv_timer_create_with_lrt" = "xyes"; then
   save_LIBS="$LIBS"
-  if test "x$vim_cv_timer_create_works" = "xyes" ; then
+  if test "x$vim_cv_timer_create_with_lrt" = "xyes" ; then
     LIBS="$LIBS -lrt"
   fi
 
@@ -3939,7 +3939,6 @@ if test "x$vim_cv_timer_create" = "xyes" ||
 
   if test "x$vim_cv_timer_create_works" = "xyes" ; then
     AC_DEFINE(HAVE_TIMER_CREATE)
-    LIBS="$LIBS -lrt"
   else
     LIBS="$save_LIBS"
   fi
@@ -4521,6 +4520,12 @@ if test "$enable_nls" = "yes"; then
 		[#include <libintl.h>],
 		[dgettext("Test", "Test");])],
 		AC_MSG_RESULT([yes]); AC_DEFINE(HAVE_DGETTEXT),
+      AC_MSG_CHECKING([for dngettext])
+		AC_MSG_RESULT([no]))
+      AC_LINK_IFELSE([AC_LANG_PROGRAM(
+		[#include <libintl.h>],
+		[dngettext("DOMAIN", "Test single", "Test plural", 1);])],
+		AC_MSG_RESULT([yes]); AC_DEFINE(HAVE_DNGETTEXT),
 		AC_MSG_RESULT([no]))
       dnl _nl_msg_cat_cntr is required for GNU gettext
       AC_MSG_CHECKING([for _nl_msg_cat_cntr])

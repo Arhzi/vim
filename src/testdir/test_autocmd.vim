@@ -1279,8 +1279,8 @@ func Test_OptionSet()
   call assert_equal(g:opt[0], g:opt[1])
 
   " 14: Setting option backspace through :let"
-  let g:options = [['backspace', '', '', '', 'eol,indent,start', 'global', 'set']]
-  let &bs = "eol,indent,start"
+  let g:options = [['backspace', 'indent,eol,start', 'indent,eol,start', 'indent,eol,start', '', 'global', 'set']]
+  let &bs = ''
   call assert_equal([], g:options)
   call assert_equal(g:opt[0], g:opt[1])
 
@@ -4103,10 +4103,10 @@ func Test_autocmd_get()
   augroup END
 
   let expected = [
-        \ {'cmd': 'echo "suspend"', 'group': 'TestAutoCmdFns', 'pattern': '*',
-        \ 'nested': v:true, 'once': v:false, 'event': 'VimSuspend'},
         \ {'cmd': 'echo "resume"', 'group': 'TestAutoCmdFns', 'pattern': '*',
-        \  'nested': v:false, 'once': v:true, 'event': 'VimResume'}]
+        \  'nested': v:false, 'once': v:true, 'event': 'VimResume'},
+        \ {'cmd': 'echo "suspend"', 'group': 'TestAutoCmdFns', 'pattern': '*',
+        \ 'nested': v:true, 'once': v:false, 'event': 'VimSuspend'}]
   call assert_equal(expected, autocmd_get(#{group: 'TestAutoCmdFns'}))
 
   " Test for buffer-local autocmd
@@ -4900,6 +4900,274 @@ func Test_autocmd_BufWinLeave_with_vsp()
   bw
   call CleanUpTestAuGroup()
   exe "bw! " .. dummy
+endfunc
+
+func Test_OptionSet_cmdheight()
+  set mouse=a laststatus=2
+  au OptionSet cmdheight :let &l:ch = v:option_new
+
+  resize -1
+  call assert_equal(2, &l:ch)
+  resize +1
+  call assert_equal(1, &l:ch)
+
+  call test_setmouse(&lines - 1, 1)
+  call feedkeys("\<LeftMouse>", 'xt')
+  call test_setmouse(&lines - 2, 1)
+  call feedkeys("\<LeftDrag>", 'xt')
+  call assert_equal(2, &l:ch)
+
+  tabnew | resize +1
+  call assert_equal(1, &l:ch)
+  tabfirst
+  call assert_equal(2, &l:ch)
+
+  tabonly
+  set cmdheight& mouse& laststatus&
+endfunc
+
+func Test_eventignorewin()
+  defer CleanUpTestAuGroup()
+  augroup testing
+    au WinEnter * :call add(g:evs, ["WinEnter", expand("<afile>")])
+    au WinLeave * :call add(g:evs, ["WinLeave", expand("<afile>")])
+    au BufWinEnter * :call add(g:evs, ["BufWinEnter", expand("<afile>")])
+  augroup END
+
+  let g:evs = []
+  set eventignorewin=WinLeave,WinEnter
+  split foo
+  call assert_equal([['BufWinEnter', 'foo']], g:evs)
+  set eventignorewin=all
+  edit bar
+  call assert_equal([['BufWinEnter', 'foo']], g:evs)
+  set eventignorewin=
+  wincmd w
+  call assert_equal([['BufWinEnter', 'foo'], ['WinLeave', 'bar']], g:evs)
+
+  only!
+  %bwipe!
+  set eventignorewin&
+  unlet g:evs
+endfunc
+
+func Test_WinScrolled_Resized_eiw()
+  CheckRunVimInTerminal
+
+  let lines =<< trim END
+    call setline(1, ['foo']->repeat(32))
+    set eventignorewin=WinScrolled,WinResized
+    split
+    let [g:afile,g:resized,g:scrolled] = ['none',0,0]
+    au WinScrolled * let [g:afile,g:scrolled] = [expand('<afile>'),g:scrolled+1]
+    au WinResized * let [g:afile,g:resized] = [expand('<afile>'),g:resized+1]
+  END
+  call writefile(lines, 'Xtest_winscrolled_eiw', 'D')
+  let buf = RunVimInTerminal('-S Xtest_winscrolled_eiw', {'rows': 10})
+
+  " Both windows are ignoring resize events
+  call term_sendkeys(buf, "\<C-W>-")
+  call TermWait(buf)
+  call term_sendkeys(buf, ":echo g:afile g:resized g:scrolled\<CR>")
+  call WaitForAssert({-> assert_equal('none 0 0', term_getline(buf, 10))}, 1000)
+
+  " And scroll events
+  call term_sendkeys(buf, "Ggg")
+  call TermWait(buf)
+  call term_sendkeys(buf, ":echo g:afile g:resized g:scrolled\<CR>")
+  call WaitForAssert({-> assert_equal('none 0 0', term_getline(buf, 10))}, 1000)
+
+  " Un-ignore events in second window, make first window current and resize
+  call term_sendkeys(buf, ":set eventignorewin=\<CR>\<C-W>w\<C-W>+")
+  call TermWait(buf)
+  call term_sendkeys(buf, ":echo win_getid() g:afile g:resized g:scrolled\<CR>")
+  call WaitForAssert({-> assert_equal('1000 1001 1 1', term_getline(buf, 10))}, 1000)
+
+  call StopVimInTerminal(buf)
+endfunc
+
+" Test that TabClosedPre and TabClosed are triggered when closing a tab.
+func Test_autocmd_tabclosedpre()
+  augroup testing
+    au TabClosedPre * call add(g:tabpagenr_pre, t:testvar)
+    au TabClosed * call add(g:tabpagenr_post, t:testvar)
+  augroup END
+
+  " Test 'tabclose' triggering
+  let g:tabpagenr_pre = []
+  let g:tabpagenr_post = []
+  let t:testvar = 1
+  tabnew
+  let t:testvar = 2
+  tabnew
+  let t:testvar = 3
+  tabnew
+  let t:testvar = 4
+  tabnext
+  tabclose
+  tabclose
+  tabclose
+  call assert_equal([1, 2, 3], g:tabpagenr_pre)
+  call assert_equal([2, 3, 4], g:tabpagenr_post)
+
+  " Test 'tabclose {count}' triggering
+  let g:tabpagenr_pre = []
+  let g:tabpagenr_post = []
+  let t:testvar = 1
+  tabnew
+  let t:testvar = 2
+  tabnew
+  let t:testvar = 3
+  tabclose 2
+  tabclose 2
+  call assert_equal([2, 3], g:tabpagenr_pre)
+  call assert_equal([3, 1], g:tabpagenr_post)
+
+  " Test 'tabonly' triggering
+  let g:tabpagenr_pre = []
+  let g:tabpagenr_post = []
+  let t:testvar = 1
+  tabnew
+  let t:testvar = 2
+  tabonly
+  call assert_equal([1], g:tabpagenr_pre)
+  call assert_equal([2], g:tabpagenr_post)
+
+  " Test 'q' and 'close' triggering (closing the last window in a tab)
+  let g:tabpagenr_pre = []
+  let g:tabpagenr_post = []
+  split
+  let t:testvar = 1
+  tabnew
+  let t:testvar = 2
+  split
+  vsplit
+  tabnew
+  let t:testvar = 3
+  tabnext
+  only
+  quit
+  quit
+  close
+  close
+  call assert_equal([1, 2], g:tabpagenr_pre)
+  call assert_equal([2, 3], g:tabpagenr_post)
+
+  func ClearAutomcdAndCreateTabs()
+    au! TabClosedPre
+    bw!
+    e Z
+    tabonly
+    tabnew A
+    tabnew B
+    tabnew C
+  endfunc
+
+  func GetTabs()
+    redir => tabsout
+      tabs
+    redir END
+    let tabsout = substitute(tabsout, '\n', '', 'g')
+    let tabsout = substitute(tabsout, 'Tab page ', '', 'g')
+    let tabsout = substitute(tabsout, ' ', '', 'g')
+    return tabsout
+  endfunc
+
+  call CleanUpTestAuGroup()
+
+  " Close tab in TabClosedPre autocmd
+  call ClearAutomcdAndCreateTabs()
+  au TabClosedPre * tabclose
+  call assert_fails('tabclose', 'E1312')
+  call ClearAutomcdAndCreateTabs()
+  au TabClosedPre * tabclose
+  call assert_fails('tabclose 2', 'E1312')
+  call ClearAutomcdAndCreateTabs()
+  au TabClosedPre * tabclose 1
+  call assert_fails('tabclose', 'E1312')
+
+  " Close other (all) tabs in TabClosedPre autocmd
+  call ClearAutomcdAndCreateTabs()
+  au TabClosedPre * tabonly
+  call assert_fails('tabclose', 'E1312')
+  call ClearAutomcdAndCreateTabs()
+  au TabClosedPre * tabonly
+  call assert_fails('tabclose 2', 'E1312')
+  call ClearAutomcdAndCreateTabs()
+  au TabClosedPre * tabclose 4
+  call assert_fails('tabclose 2', 'E1312')
+
+  " Open new tabs in TabClosedPre autocmd
+  call ClearAutomcdAndCreateTabs()
+  au TabClosedPre * tabnew D
+  call assert_fails('tabclose', 'E1312')
+  call ClearAutomcdAndCreateTabs()
+  au TabClosedPre * tabnew D
+  call assert_fails('tabclose 1', 'E1312')
+
+  " Moving the tab page in TabClosedPre autocmd
+  call ClearAutomcdAndCreateTabs()
+  au TabClosedPre * tabmove 0
+  tabclose
+  call assert_equal('1>Z2A3B', GetTabs())
+  call ClearAutomcdAndCreateTabs()
+  au TabClosedPre * tabmove 0
+  tabclose 1
+  call assert_equal('1A2B3>C', GetTabs())
+  tabonly
+  call assert_equal('1>C', GetTabs())
+
+  " Switching tab page in TabClosedPre autocmd
+  call ClearAutomcdAndCreateTabs()
+  au TabClosedPre * tabnext | e Y
+  tabclose
+  call assert_equal('1Y2A3>B', GetTabs())
+  call ClearAutomcdAndCreateTabs()
+  au TabClosedPre * tabnext | e Y
+  tabclose 1
+  call assert_equal('1Y2B3>C', GetTabs())
+  tabonly
+  call assert_equal('1>Y', GetTabs())
+
+  " Create new windows in TabClosedPre autocmd
+  call ClearAutomcdAndCreateTabs()
+  au TabClosedPre * split | e X| vsplit | e Y | split | e Z
+  call assert_fails('tabclose', 'E242')
+  call ClearAutomcdAndCreateTabs()
+  au TabClosedPre * new X | new Y | new Z
+  call assert_fails('tabclose 1', 'E242')
+
+  " Test directly closing the tab page with ':tabclose'
+  au!
+  tabonly
+  bw!
+  e Z
+  au TabClosedPre * mksession!
+  tabnew A
+  sp
+  tabclose
+  source Session.vim
+  call assert_equal('1Z2>AA', GetTabs())
+
+  " Test directly closing the tab page with ':tabonly'
+  " Z is closed before A. Hence A overwrites the session.
+  au!
+  tabonly
+  bw!
+  e Z
+  au TabClosedPre * mksession!
+  tabnew A
+  tabnew B
+  tabonly
+  source Session.vim
+  call assert_equal('1>A2B', GetTabs())
+
+  " Clean up
+  call delete('Session.vim')
+  au!
+  only
+  tabonly
+  bw!
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

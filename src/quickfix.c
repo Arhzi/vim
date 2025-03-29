@@ -2035,10 +2035,24 @@ wipe_qf_buffer(qf_info_T *qi)
     qfbuf = buflist_findnr(qi->qf_bufnr);
     if (qfbuf != NULL && qfbuf->b_nwindows == 0)
     {
+	int buf_was_null = FALSE;
+	// can happen when curwin is going to be closed e.g. curwin->w_buffer
+	// was already closed in win_close(), and we are now closing the
+	// window related location list buffer from win_free_mem()
+	// but close_buffer() calls CHECK_CURBUF() macro and requires
+	// curwin->w_buffer == curbuf
+	if (curwin->w_buffer == NULL)
+	{
+	    curwin->w_buffer = curbuf;
+	    buf_was_null = TRUE;
+	}
+
 	// If the quickfix buffer is not loaded in any window, then
 	// wipe the buffer.
 	close_buffer(NULL, qfbuf, DOBUF_WIPE, FALSE, FALSE);
 	qi->qf_bufnr = INVALID_QFBUFNR;
+	if (buf_was_null)
+	    curwin->w_buffer = NULL;
     }
 }
 
@@ -6246,7 +6260,8 @@ vgr_match_buflines(
 
 	    // Fuzzy string match
 	    CLEAR_FIELD(matches);
-	    while (fuzzy_match(str + col, spat, FALSE, &score, matches, sz) > 0)
+	    while (fuzzy_match(str + col, spat, FALSE, &score,
+			matches, sz, TRUE) > 0)
 	    {
 		// Pass the buffer number so that it gets used even for a
 		// dummy buffer, unless duplicate_name is set, then the
@@ -8064,7 +8079,7 @@ static int mark_quickfix_user_data(qf_info_T *qi, int copyID)
 	    typval_T* user_data = &qfp->qf_user_data;
 	    if (user_data != NULL && user_data->v_type != VAR_NUMBER
 		&& user_data->v_type != VAR_STRING && user_data->v_type != VAR_FLOAT)
-		abort = abort || set_ref_in_item(user_data, copyID, NULL, NULL);
+		abort = abort || set_ref_in_item(user_data, copyID, NULL, NULL, NULL);
 	}
     }
     return abort;
@@ -8087,7 +8102,7 @@ mark_quickfix_ctx(qf_info_T *qi, int copyID)
 	ctx = qi->qf_lists[i].qf_ctx;
 	if (ctx != NULL && ctx->v_type != VAR_NUMBER
 		&& ctx->v_type != VAR_STRING && ctx->v_type != VAR_FLOAT)
-	    abort = abort || set_ref_in_item(ctx, copyID, NULL, NULL);
+	    abort = abort || set_ref_in_item(ctx, copyID, NULL, NULL, NULL);
 
 	cb = &qi->qf_lists[i].qf_qftf_cb;
 	abort = abort || set_ref_in_callback(cb, copyID);

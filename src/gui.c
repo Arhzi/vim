@@ -488,6 +488,7 @@ gui_init_check(void)
 gui_init(void)
 {
     win_T	*wp;
+    tabpage_T	*tp;
     static int	recursive = 0;
 
     /*
@@ -695,7 +696,7 @@ gui_init(void)
     gui_reset_scroll_region();
 
     // Create initial scrollbars
-    FOR_ALL_WINDOWS(wp)
+    FOR_ALL_TAB_WINDOWS(tp, wp)
     {
 	gui_create_scrollbar(&wp->w_scrollbars[SBAR_LEFT], SBAR_LEFT, wp);
 	gui_create_scrollbar(&wp->w_scrollbars[SBAR_RIGHT], SBAR_RIGHT, wp);
@@ -4478,13 +4479,15 @@ gui_do_scroll(void)
     /*
      * Don't call updateWindow() when nothing has changed (it will overwrite
      * the status line!).
+     *
+     * Check for ScreenLines, because in ex-mode, we don't have a valid display.
      */
-    if (old_topline != wp->w_topline
+    if (ScreenLines != NULL && (old_topline != wp->w_topline
 	    || wp->w_redr_type != 0
 #ifdef FEAT_DIFF
 	    || old_topfill != wp->w_topfill
 #endif
-	    )
+	    ))
     {
 	int type = UPD_VALID;
 
@@ -5286,7 +5289,7 @@ gui_do_findrepl(
 
 		    del_bytes((long)(regmatch.endp[0] - regmatch.startp[0]),
 								FALSE, FALSE);
-		    ins_str(repl_text);
+		    ins_str(repl_text, STRLEN(repl_text));
 		}
 	    }
 	    else

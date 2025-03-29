@@ -43,6 +43,8 @@ static int    start_message_win_timer = FALSE;
 static void may_start_message_win_timer(win_T *wp);
 #endif
 
+static int popup_on_cmdline = FALSE;
+
 static void popup_adjust_position(win_T *wp);
 
 /*
@@ -696,9 +698,6 @@ popup_highlight_curline(win_T *wp)
 	if (!sign_exists_by_name(sign_name))
 	{
 	    char *linehl = "PopupSelected";
-
-	    if (syn_name2id((char_u *)linehl) == 0)
-		linehl = "PmenuSel";
 	    sign_define_by_name(sign_name, NULL, (char_u *)linehl, NULL, NULL, NULL,
 		    NULL, SIGN_DEF_PRIO);
 	}
@@ -1434,17 +1433,7 @@ popup_adjust_position(win_T *wp)
 	len = linetabsize(wp, lnum);
 	wp->w_width = w_width;
 
-	if (wp->w_p_wrap)
-	{
-	    while (len + margin_width > maxwidth)
-	    {
-		++wrapped;
-		len -= maxwidth - margin_width;
-		wp->w_width = maxwidth;
-		used_maxwidth = TRUE;
-	    }
-	}
-	else if (len + margin_width > maxwidth
+	if (len + margin_width > maxwidth
 		&& allow_adjust_left
 		&& (wp->w_popup_pos == POPPOS_TOPLEFT
 		    || wp->w_popup_pos == POPPOS_BOTLEFT))
@@ -1456,13 +1445,22 @@ popup_adjust_position(win_T *wp)
 	    {
 		int truncate_shift = shift_by - wp->w_wincol;
 
-		len -= truncate_shift;
 		shift_by -= truncate_shift;
 	    }
 
 	    wp->w_wincol -= shift_by;
 	    maxwidth += shift_by;
 	    wp->w_width = maxwidth;
+	}
+	if (wp->w_p_wrap)
+	{
+	    while (len + margin_width > maxwidth)
+	    {
+		++wrapped;
+		len -= maxwidth - margin_width;
+		wp->w_width = maxwidth;
+		used_maxwidth = TRUE;
+	    }
 	}
 	if (wp->w_width < len + margin_width)
 	{
@@ -2007,10 +2005,8 @@ popup_update_color(win_T *wp, create_type_T type)
 {
     char    *hiname = type == TYPE_MESSAGE_WIN
 				       ? "MessageWindow" : "PopupNotification";
-    int		nr = syn_name2id((char_u *)hiname);
-
     set_string_option_direct_in_win(wp, (char_u *)"wincolor", -1,
-		(char_u *)(nr == 0 ? "WarningMsg" : hiname),
+		(char_u *)hiname,
 		OPT_FREE|OPT_LOCAL, 0);
 }
 
@@ -3590,6 +3586,20 @@ popup_do_filter(int c)
 		&& (wp->w_filter_mode & state) != 0)
 	    res = invoke_popup_filter(wp, c);
 
+    // when Ctrl-C and no popup has been processed (res is still FALSE)
+    // Try to find and close a popup that has no filter callback
+    if (c == Ctrl_C && res == FALSE)
+    {
+	popup_reset_handled(POPUP_HANDLED_2);
+	wp = find_next_popup(FALSE, POPUP_HANDLED_2);
+        if (wp != NULL)
+        {
+	    popup_close_with_retval(wp, -1);
+	    res = TRUE;
+	}
+    }
+
+
     if (must_redraw > was_must_redraw)
     {
 	int save_got_int = got_int;
@@ -4406,13 +4416,13 @@ set_ref_in_one_popup(win_T *wp, int copyID)
     {
 	tv.v_type = VAR_PARTIAL;
 	tv.vval.v_partial = wp->w_close_cb.cb_partial;
-	abort = abort || set_ref_in_item(&tv, copyID, NULL, NULL);
+	abort = abort || set_ref_in_item(&tv, copyID, NULL, NULL, NULL);
     }
     if (wp->w_filter_cb.cb_partial != NULL)
     {
 	tv.v_type = VAR_PARTIAL;
 	tv.vval.v_partial = wp->w_filter_cb.cb_partial;
-	abort = abort || set_ref_in_item(&tv, copyID, NULL, NULL);
+	abort = abort || set_ref_in_item(&tv, copyID, NULL, NULL, NULL);
     }
     abort = abort || set_ref_in_list(wp->w_popup_mask, copyID);
     return abort;
@@ -4570,7 +4580,10 @@ popup_hide_info(void)
     win_T *wp = popup_find_info_window();
 
     if (wp != NULL)
+    {
+	popup_on_cmdline = wp->w_popup_flags & POPF_ON_CMDLINE;
 	popup_hide(wp);
+    }
 }
 
 /*
@@ -4585,6 +4598,15 @@ popup_close_info(void)
 	popup_close_with_retval(wp, -1);
 }
 #endif
+
+/*
+ * Returns TRUE if a popup extends into the cmdline area.
+ */
+    int
+popup_overlaps_cmdline(void)
+{
+    return popup_on_cmdline;
+}
 
 #if defined(HAS_MESSAGE_WINDOW) || defined(PROTO)
 

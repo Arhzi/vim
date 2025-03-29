@@ -738,6 +738,7 @@ OBJ = \
 	$(OUTDIR)\indent.obj \
 	$(OUTDIR)\insexpand.obj \
 	$(OUTDIR)\json.obj \
+	$(OUTDIR)\linematch.obj \
 	$(OUTDIR)\list.obj \
 	$(OUTDIR)\locale.obj \
 	$(OUTDIR)\logfile.obj \
@@ -785,6 +786,7 @@ OBJ = \
 	$(OUTDIR)\textobject.obj \
 	$(OUTDIR)\textprop.obj \
 	$(OUTDIR)\time.obj \
+	$(OUTDIR)\tuple.obj \
 	$(OUTDIR)\typval.obj \
 	$(OUTDIR)\ui.obj \
 	$(OUTDIR)\undo.obj \
@@ -1675,6 +1677,8 @@ $(OUTDIR)/job.obj:	$(OUTDIR) job.c $(INCL)
 
 $(OUTDIR)/json.obj:	$(OUTDIR) json.c  $(INCL)
 
+$(OUTDIR)/linematch.obj:	$(OUTDIR) linematch.c  $(INCL)
+
 $(OUTDIR)/list.obj:	$(OUTDIR) list.c  $(INCL)
 
 $(OUTDIR)/locale.obj:	$(OUTDIR) locale.c  $(INCL)
@@ -1787,6 +1791,8 @@ $(OUTDIR)/textobject.obj:	$(OUTDIR) textobject.c  $(INCL)
 $(OUTDIR)/textprop.obj:	$(OUTDIR) textprop.c  $(INCL)
 
 $(OUTDIR)/time.obj:	$(OUTDIR) time.c  $(INCL)
+
+$(OUTDIR)/tuple.obj:	$(OUTDIR) tuple.c  $(INCL)
 
 $(OUTDIR)/typval.obj:	$(OUTDIR) typval.c  $(INCL)
 
@@ -1954,6 +1960,7 @@ proto.h: \
 	proto/indent.pro \
 	proto/insexpand.pro \
 	proto/json.pro \
+	proto/linematch.pro \
 	proto/list.pro \
 	proto/locale.pro \
 	proto/logfile.pro \
@@ -2001,6 +2008,7 @@ proto.h: \
 	proto/textobject.pro \
 	proto/textprop.pro \
 	proto/time.pro \
+	proto/tuple.pro \
 	proto/typval.pro \
 	proto/ui.pro \
 	proto/undo.pro \

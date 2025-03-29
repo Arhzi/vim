@@ -1879,7 +1879,7 @@ foldDelMarker(linenr_T lnum, char_u *marker, int markerlen)
 	    {
 		// Also delete 'commentstring' if it matches.
 		cms2 = (char_u *)strstr((char *)cms, "%s");
-		if (p - line >= cms2 - cms
+		if (cms2 != NULL && p - line >= cms2 - cms
 			&& STRNCMP(p - (cms2 - cms), cms, cms2 - cms) == 0
 			&& STRNCMP(p + len, cms2 + 2, STRLEN(cms2 + 2)) == 0)
 		{
@@ -2384,12 +2384,7 @@ foldUpdateIEMS(win_T *wp, linenr_T top, linenr_T bot)
     // this in other situations, the changed lines will be redrawn anyway and
     // this method can cause the whole window to be updated.
     if (end != bot)
-    {
-	if (wp->w_redraw_top == 0 || wp->w_redraw_top > top)
-	    wp->w_redraw_top = top;
-	if (wp->w_redraw_bot < end)
-	    wp->w_redraw_bot = end;
-    }
+	redraw_win_range_later(wp, top, end);
 
     invalid_top = (linenr_T)0;
 }

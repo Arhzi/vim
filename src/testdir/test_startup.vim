@@ -740,6 +740,19 @@ func Test_log()
   call delete('Xlogfile')
 endfunc
 
+func Test_log_nonexistent()
+  " this used to crash Vim
+  CheckRunVimInTerminal
+  CheckUnix
+  let args = ' -u NONE -i NONE -U NONE --log /X/Xlogfile -X -c qa!'
+  let options = {'term_finish': 'open', 'cmd':
+        \  'sh -c "' .. GetVimCommand() .. args .. '"'}
+  let buf = RunVimInTerminal('', options)
+  call WaitForAssert({-> assert_match('E484: Can''t open file.*Xlogfile', term_getline(buf, 1))})
+  " terminal job has already finished, so just close the buffer
+  exe buf .. "bw!"
+endfunc
+
 func Test_read_stdin()
   let after =<< trim [CODE]
     write Xtestout
@@ -1037,6 +1050,8 @@ func Test_EXINIT()
   [CODE]
   call writefile(after, 'Xafter', 'D')
   let cmd = GetVimProg() . ' --not-a-term -S Xafter --cmd "set enc=utf8"'
+  call setenv('HOME', '/non-existing')
+  call setenv('XDG_CONFIG_HOME', '/non-existing')
   call setenv('EXINIT', 'let exinit_found="yes"')
   exe "silent !" . cmd
   call assert_equal([], readfile('Xtestout'))

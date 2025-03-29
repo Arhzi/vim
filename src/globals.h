@@ -549,7 +549,14 @@ EXTERN int	garbage_collect_at_exit INIT(= FALSE);
 #define t_typealias		(static_types[90])
 #define t_const_typealias	(static_types[91])
 
-EXTERN type_T static_types[92]
+#define t_tuple_any		(static_types[92])
+#define t_const_tuple_any	(static_types[93])
+
+#define t_tuple_empty		(static_types[94])
+#define t_const_tuple_empty	(static_types[95])
+
+
+EXTERN type_T static_types[96]
 #ifdef DO_INIT
 = {
     // 0: t_unknown
@@ -735,6 +742,14 @@ EXTERN type_T static_types[92]
     // 90: t_typealias
     {VAR_TYPEALIAS, 0, 0, TTFLAG_STATIC, NULL, NULL, NULL},
     {VAR_TYPEALIAS, 0, 0, TTFLAG_STATIC|TTFLAG_CONST, NULL, NULL, NULL},
+
+    // 92: t_tuple_any
+    {VAR_TUPLE, -1, 0, TTFLAG_STATIC, NULL, NULL, NULL},
+    {VAR_TUPLE, -1, 0, TTFLAG_STATIC|TTFLAG_CONST, NULL, NULL, NULL},
+
+    // 94: t_tuple_empty
+    {VAR_TUPLE, 0, 0, TTFLAG_STATIC, NULL, NULL, NULL},
+    {VAR_TUPLE, 0, 0, TTFLAG_STATIC|TTFLAG_CONST, NULL, NULL, NULL},
 }
 #endif
 ;
@@ -869,6 +884,7 @@ EXTERN int	drag_sep_line INIT(= FALSE);	// dragging vert separator
 #ifdef FEAT_DIFF
 // Value set from 'diffopt'.
 EXTERN int	diff_context INIT(= 6);		// context for folds
+EXTERN int      linematch_lines INIT(= 0);      // number of lines for diff line match
 EXTERN int	diff_foldcolumn INIT(= 2);	// 'foldcolumn' for diff mode
 EXTERN int	diff_need_scrollbind INIT(= FALSE);
 #endif
@@ -1143,6 +1159,8 @@ EXTERN int	VIsual_select INIT(= FALSE);
 				// whether Select mode is active
 EXTERN int	VIsual_select_reg INIT(= 0);
 				// register name for Select mode
+EXTERN int  VIsual_select_exclu_adj INIT(= FALSE);
+				// whether incremented cursor during exclusive selection
 EXTERN int	restart_VIsual_select INIT(= 0);
 				// restart Select mode when next cmd finished
 EXTERN int	VIsual_reselect;
@@ -2042,3 +2060,7 @@ EXTERN int skip_update_topline INIT(= FALSE);
 // 'showcmd' buffer shared between normal.c and statusline code
 #define SHOWCMD_BUFLEN (SHOWCMD_COLS + 1 + 30)
 EXTERN char_u showcmd_buf[SHOWCMD_BUFLEN];
+
+#ifdef FEAT_TERMGUICOLORS
+EXTERN int	p_tgc_set INIT(= FALSE);
+#endif

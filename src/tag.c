@@ -3421,6 +3421,7 @@ get_tagfname(
 	    *filename++ = NUL;
 
 	    tnp->tn_search_ctx = vim_findfile_init(buf, filename,
+		    STRLEN(filename),
 		    r_ptr, 100,
 		    FALSE,	   // don't free visited list
 		    FINDFILE_FILE, // we search for a file
@@ -3996,6 +3997,8 @@ jumpto_tag(
 	    ++sandbox;
 #endif
 	    curwin->w_cursor.lnum = 1;		// start command in line 1
+	    curwin->w_cursor.col = 0;
+	    curwin->w_cursor.coladd = 0;
 	    do_cmdline_cmd(pbuf);
 	    retval = OK;
 
